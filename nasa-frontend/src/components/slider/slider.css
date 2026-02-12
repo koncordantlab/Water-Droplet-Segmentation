@@ -1,0 +1,55 @@
+.slider-container {
+  position: relative;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.slider-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.slider-input::-webkit-slider-thumb {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #003194;
+  cursor: pointer;
+  border: 1px solid #fff;
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+
+.slider-input:active::-webkit-slider-thumb {
+    transform: scale(1.2);
+    background: #003194;
+}
+
+.slider-input {
+  width: 100%;
+  appearance: none;
+  height: 6px;
+  background: #ddd;
+  border-radius: 3px;
+  outline: none;
+  --thumb-width: 18px;
+}
+
+.slider-input::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+}
+
+/* Tooltip styling */
+.slider-tooltip {
+  position: absolute;
+  bottom: 20px; /* above thumb */
+  transform: translateX(-50%);
+  background: #333;
+  color: #fff;
+  font-size: 16px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+}

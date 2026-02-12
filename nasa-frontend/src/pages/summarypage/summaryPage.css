@@ -1,0 +1,29 @@
+.summary-page-container{
+    min-height: 100vh;
+    background: linear-gradient(90deg, #000, #737373);
+    color: white;
+    padding: 2rem 3rem;
+}
+
+.go-back-button{
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    background-color: #61dafb;
+    color: #000;
+    border: none;
+    padding: 10px 15px;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.charts-container{
+    display: flex;
+    gap: 12px;
+    margin-top: 24px;
+}
+
+.left-section, .right-section{
+    flex: 1;
+}
+

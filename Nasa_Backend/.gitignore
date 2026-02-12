@@ -1,0 +1,37 @@
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+/.vscode
+/.settings
+/.idea
+/.pytest_cache
+/.mypy_cache
+/.tox
+/.nox
+/__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+*.db
+*.log
+*.bak
+*.backup
+*.swp
+instance/
+.env
+.env.*
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+docs/_build/
+target/
+.scrapy
+
+# segmentation results
+"segmentation results/"
+*summary.xlsx
+*summary.csv
