@@ -189,24 +189,20 @@ app.clientside_callback("function(n_clicks) { if (!n_clicks) return ''; return w
 SIZE_DIST_BINS = 30
 
 
-def _major_axis_length(binary_mask):
-    """Length of the longest side of the minimum rotated bounding rectangle
-    around the largest contour in a binary mask. Captures real droplet
-    extent for elongated/irregular shapes (unlike equivalent-circular diameter).
+def _eq_diameter(areas):
+    """Convert mask pixel areas to equivalent circular diameter in pixels:
+    d = √(4·A/π), i.e. the diameter of a circle with the same area as the mask.
+    Compresses dynamic range vs raw area so the histogram axis stays readable.
     """
-    contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return 0.0
-    largest = max(contours, key=cv2.contourArea)
-    if len(largest) < 2:
-        return 0.0
-    (_, _), (w_rect, h_rect), _ = cv2.minAreaRect(largest)
-    return float(max(w_rect, h_rect))
+    return np.sqrt(4.0 * np.asarray(areas, dtype=float) / np.pi)
 
 
 def _shared_bin_edges(all_values):
-    """Return common histogram edges for all checkpoints of a single class.
-    Falls back to a synthetic single-bin range if the data is degenerate.
+    """Return common log-spaced histogram edges for all checkpoints of a single
+    class, so bars render with uniform visual width on a log x-axis.
+    Falls back to a synthetic single-bin range if the data is degenerate, or to
+    linear spacing if any value is non-positive (shouldn't happen for
+    eq-diameters since area > 0 is enforced upstream).
     Returns None when there are no values at all (caller should treat as empty).
     """
     if not all_values:
@@ -214,11 +210,15 @@ def _shared_bin_edges(all_values):
     arr = np.asarray(all_values, dtype=float)
     if arr.size == 1 or arr.min() == arr.max():
         return np.array([float(arr.min()), float(arr.min()) + 1.0])
-    return np.histogram_bin_edges(arr, bins=SIZE_DIST_BINS)
+    lo = float(arr.min())
+    hi = float(arr.max())
+    if lo <= 0:
+        return np.histogram_bin_edges(arr, bins=SIZE_DIST_BINS)
+    return np.logspace(np.log10(lo), np.log10(hi), SIZE_DIST_BINS + 1)
 
 
-def _droplet_stats_block(diameters, edges=None):
-    arr = np.asarray(diameters, dtype=float)
+def _droplet_stats_block(values, edges=None):
+    arr = np.asarray(values, dtype=float)
     if arr.size == 0:
         if edges is not None and len(edges) > 1:
             return {
@@ -265,8 +265,11 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
       - ov: {'x': [...], 'ww': [...], 'ii': [...], 'wi': [...]}
       - donuts: {'water_count': int, 'ice_count': int, 'void_pct_avg': float, 'avg_conf': float}
 
-    size_distribution (None when dist_interval <= 0): per-class droplet equivalent-diameter
-    distributions sampled at processed frames N, 2N, 3N, ..., plus the final processed frame.
+    size_distribution (None when dist_interval <= 0): per-class droplet
+    equivalent-circular-diameter distributions (d = √(4·A/π), derived from
+    the same mask pixel areas the detection part accumulates into
+    `water_pixel_area` / `ice_pixel_area`). Sampled at processed frames
+    N, 2N, 3N, ..., plus the final processed frame.
       - {"interval": int, "unit": str, "checkpoints": [{"frame": int, "water": {...}, "ice": {...}}, ...]}
     """
     start_time = time.time()
@@ -315,11 +318,11 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
 
         rows, overlap_totals = [], {"ww": 0, "ii": 0, "mixed": 0}
         frame_count, processed_frame_count = 0, 0
-        size_checkpoints_raw = []  # list of (frame, water_diams, ice_diams)
-        last_frame_diams = {"frame": 0, "water": [], "ice": []}
+        size_checkpoints_raw = []  # list of (frame, water_areas, ice_areas)
+        last_frame_areas = {"frame": 0, "water": [], "ice": []}
 
         def process_batch(batch_frames, batch_counts):
-            nonlocal rows, overlap_totals, size_checkpoints_raw, last_frame_diams
+            nonlocal rows, overlap_totals, size_checkpoints_raw, last_frame_areas
             results_list = model(batch_frames, imgsz=640, verbose=False)
 
             for i, res in enumerate(results_list):
@@ -330,7 +333,7 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
                 water_cnt, ice_cnt, water_area, ice_area = 0, 0, 0, 0
                 confs = []
                 ww_count, ii_count, wi_count = 0, 0, 0
-                frame_water_diams, frame_ice_diams = [], []
+                frame_water_areas, frame_ice_areas = [], []
 
                 if res.masks is not None and len(res.boxes):
                     masks_np = res.masks.data.cpu().numpy()
@@ -339,19 +342,18 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
 
                     for fm, box in zip(bin_masks, res.boxes):
                         full_m = cv2.resize(fm, (w, h), interpolation=cv2.INTER_NEAREST)
-                        area = full_m.sum()
+                        area = int(full_m.sum())
                         cls_name = res.names[int(box.cls)].lower()
-                        diameter = _major_axis_length(full_m) if area > 0 else 0.0
                         if cls_name == "water":
                             water_cnt += 1
                             water_area += area
-                            if diameter > 0:
-                                frame_water_diams.append(diameter)
+                            if area > 0:
+                                frame_water_areas.append(area)
                         elif cls_name == "ice":
                             ice_cnt += 1
                             ice_area += area
-                            if diameter > 0:
-                                frame_ice_diams.append(diameter)
+                            if area > 0:
+                                frame_ice_areas.append(area)
                         confs.append(box.conf.item())
 
                     full_masks_for_overlap = [cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST) for m in bin_masks]
@@ -396,16 +398,16 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
                     "ice_pixel_area": ice_area,
                 })
 
-                last_frame_diams = {
+                last_frame_areas = {
                     "frame": current_processed_frame,
-                    "water": frame_water_diams,
-                    "ice": frame_ice_diams,
+                    "water": frame_water_areas,
+                    "ice": frame_ice_areas,
                 }
                 if dist_interval > 0 and current_processed_frame % dist_interval == 0:
                     size_checkpoints_raw.append((
                         current_processed_frame,
-                        list(frame_water_diams),
-                        list(frame_ice_diams),
+                        list(frame_water_areas),
+                        list(frame_ice_areas),
                     ))
                 if progress_callback:
                     progress_callback({
@@ -463,23 +465,23 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
 
         size_distribution = None
         if dist_interval > 0:
-            if not size_checkpoints_raw or size_checkpoints_raw[-1][0] != last_frame_diams["frame"]:
+            if not size_checkpoints_raw or size_checkpoints_raw[-1][0] != last_frame_areas["frame"]:
                 size_checkpoints_raw.append((
-                    last_frame_diams["frame"],
-                    list(last_frame_diams["water"]),
-                    list(last_frame_diams["ice"]),
+                    last_frame_areas["frame"],
+                    list(last_frame_areas["water"]),
+                    list(last_frame_areas["ice"]),
                 ))
-            all_water = [d for _, w_d, _ in size_checkpoints_raw for d in w_d]
-            all_ice = [d for _, _, i_d in size_checkpoints_raw for d in i_d]
+            all_water = [d for _, w_a, _ in size_checkpoints_raw for d in _eq_diameter(w_a).tolist()]
+            all_ice = [d for _, _, i_a in size_checkpoints_raw for d in _eq_diameter(i_a).tolist()]
             water_edges = _shared_bin_edges(all_water)
             ice_edges = _shared_bin_edges(all_ice)
             checkpoints = [
                 {
                     "frame": int(frame),
-                    "water": _droplet_stats_block(w_d, edges=water_edges),
-                    "ice": _droplet_stats_block(i_d, edges=ice_edges),
+                    "water": _droplet_stats_block(_eq_diameter(w_a).tolist(), edges=water_edges),
+                    "ice": _droplet_stats_block(_eq_diameter(i_a).tolist(), edges=ice_edges),
                 }
-                for frame, w_d, i_d in size_checkpoints_raw
+                for frame, w_a, i_a in size_checkpoints_raw
             ]
             water_y_max = max(
                 (max(cp["water"]["histogram"]["counts"], default=0) for cp in checkpoints),
@@ -491,7 +493,7 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
             )
             size_distribution = {
                 "interval": int(dist_interval),
-                "unit": "pixels (major axis)",
+                "unit": "pixels (equivalent circular diameter)",
                 "bin_count": SIZE_DIST_BINS,
                 "y_max": {"water": int(water_y_max), "ice": int(ice_y_max)},
                 "checkpoints": checkpoints,
