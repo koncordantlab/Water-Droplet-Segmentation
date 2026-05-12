@@ -343,6 +343,75 @@ def _save_chart_pngs(df, charts, overlap_totals, charts_dir):
     plt.close(fig)
 
 
+def _save_size_distribution_pngs(size_distribution, charts_dir, video_fname_base):
+    """Render per-checkpoint droplet size-distribution histograms (water + ice
+    side-by-side) to disk. One PNG per checkpoint, log x-axis, shared bin
+    edges and y-range per class across checkpoints so frames are visually
+    comparable (matches the frontend's global-binning contract).
+    """
+    if not size_distribution or not size_distribution.get("checkpoints"):
+        return
+    os.makedirs(charts_dir, exist_ok=True)
+
+    checkpoints = size_distribution["checkpoints"]
+    water_y_max = size_distribution.get("y_max", {}).get("water", 0)
+    ice_y_max = size_distribution.get("y_max", {}).get("ice", 0)
+
+    def _global_xlim(class_key):
+        for cp in checkpoints:
+            edges = cp[class_key]["histogram"]["bin_edges"]
+            if len(edges) >= 2:
+                return float(edges[0]), float(edges[-1])
+        return None
+
+    water_xlim = _global_xlim("water")
+    ice_xlim = _global_xlim("ice")
+
+    for cp in checkpoints:
+        frame = int(cp["frame"])
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+        for ax, class_key, color, xlim, y_max in (
+            (axes[0], "water", _WATER_PLOT_COLOR, water_xlim, water_y_max),
+            (axes[1], "ice", _ICE_PLOT_COLOR, ice_xlim, ice_y_max),
+        ):
+            block = cp[class_key]
+            hist = block["histogram"]
+            edges = np.asarray(hist["bin_edges"], dtype=float)
+            counts = hist["counts"]
+            label = class_key.capitalize()
+            if edges.size >= 2 and counts:
+                widths = np.diff(edges)
+                ax.bar(
+                    edges[:-1], counts, width=widths, align="edge",
+                    color=color, alpha=0.85, edgecolor="black", linewidth=0.3,
+                    label=f"{label} (n={block['count']})",
+                )
+                if xlim and xlim[0] > 0 and xlim[1] > xlim[0]:
+                    ax.set_xscale("log")
+                    ax.set_xlim(xlim)
+                ax.legend(loc="upper right")
+            else:
+                ax.text(
+                    0.5, 0.5, f"No {label.lower()} droplets",
+                    ha="center", va="center", transform=ax.transAxes,
+                )
+            ax.set_xlabel("Equivalent circular diameter (pixels)")
+            ax.set_ylabel("Droplet count")
+            ax.set_title(f"{label} — frame {frame}")
+            if y_max and y_max > 0:
+                ax.set_ylim(0, y_max * 1.05)
+            ax.grid(True, alpha=0.3)
+
+        fig.suptitle(f"Droplet size distribution — frame {frame}")
+        fig.tight_layout()
+        out_path = os.path.join(
+            charts_dir, f"{video_fname_base}_size_dist_frame_{frame:06d}.png"
+        )
+        fig.savefig(out_path, dpi=150)
+        plt.close(fig)
+
+
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".wmv"}
 
 
@@ -639,6 +708,12 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
                 "y_max": {"water": int(water_y_max), "ice": int(ice_y_max)},
                 "checkpoints": checkpoints,
             }
+
+            try:
+                _save_size_distribution_pngs(size_distribution, charts_dir, video_fname_base)
+                print(f"📊 Saved size distribution PNGs to {charts_dir}")
+            except Exception as size_chart_err:
+                print(f"⚠️  Failed to save size distribution PNGs ({size_chart_err}); continuing.")
 
         end_time = time.time()
         print(f"✅ Processing complete! Elapsed time: {end_time - start_time:.2f} seconds")
