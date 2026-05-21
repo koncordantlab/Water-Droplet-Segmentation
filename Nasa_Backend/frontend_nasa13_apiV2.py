@@ -460,7 +460,7 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
 
     video_fps = cap.get(cv2.CAP_PROP_FPS)
     print("Video FPS:", video_fps)
-    stride = int(round(video_fps)) if video_fps > 0 else 1
+    stride = max(1, int(round(video_fps))) if video_fps > 0 else 1
     BATCH_SIZE = 4
     frame_batch, frame_count_batch = [], []
     video_fname = os.path.basename(video_path)
