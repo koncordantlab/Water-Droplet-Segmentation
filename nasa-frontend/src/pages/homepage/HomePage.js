@@ -15,6 +15,8 @@ const HomePage = ({
     const [videoPath, setVideoPath] = useState("")
     const [isSegmentationOn, setIsSegmentationOn] = useState(true)
     const [distInterval, setDistInterval] = useState(0)
+    const [outputMode, setOutputMode] = useState("full")
+    const [umPerPx, setUmPerPx] = useState("")
 
     const handleTextInputChange = (e) => {
         setVideoPath(e.target.value)
@@ -87,10 +89,37 @@ const HomePage = ({
                     style={{ width: 80 }}
                 />
             </div>
+            <div className="output-mode-input" style={{ marginTop: 12 }}>
+                <label htmlFor="output-mode-field" className="switch-text" style={{ marginRight: 8 }}>
+                    Output detail:
+                </label>
+                <select
+                    id="output-mode-field"
+                    value={outputMode}
+                    onChange={(e) => setOutputMode(e.target.value)}
+                >
+                    <option value="full">Full (all metrics)</option>
+                    <option value="basic">Basic (sizes only)</option>
+                </select>
+            </div>
+            <div className="um-per-px-input" style={{ marginTop: 12 }}>
+                <label htmlFor="um-per-px-field" className="switch-text" style={{ marginRight: 8 }}>
+                    Scale (µm per pixel, optional):
+                </label>
+                <input
+                    id="um-per-px-field"
+                    type="number"
+                    min={0}
+                    step="any"
+                    value={umPerPx}
+                    onChange={(e) => setUmPerPx(e.target.value)}
+                    style={{ width: 80 }}
+                />
+            </div>
             <div className="submit-section">
                 <button
                     id="run-btn"
-                    onClick={(ev) => handleSubmit(ev, videoPath, isSegmentationOn, distInterval)}
+                    onClick={(ev) => handleSubmit(ev, videoPath, isSegmentationOn, distInterval, outputMode, umPerPx)}
                     disabled={loading || videoPath === ""}
                 >
                     {loading ? "Processing..." : "Run Detection"}
