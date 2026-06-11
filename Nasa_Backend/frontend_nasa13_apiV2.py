@@ -1,5 +1,6 @@
 import time
 start = time.time()
+import math
 import os
 import cv2
 import numpy as np
@@ -82,14 +83,18 @@ def make_json_serializable(obj):
     # handle None
     if obj is None:
         return None
-    # primitives
-    if isinstance(obj, (str, int, float, bool)):
+    # primitives — non-finite floats become null: json.dumps would emit a bare
+    # NaN/Infinity token, which JSON.parse rejects on the SSE frontend
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, (str, int, bool)):
         return obj
     # numpy scalar types
     if isinstance(obj, (np.integer,)):
         return int(obj)
     if isinstance(obj, (np.floating,)):
-        return float(obj)
+        f = float(obj)
+        return f if math.isfinite(f) else None
     if isinstance(obj, (np.bool_,)):
         return bool(obj)
     # numpy arrays

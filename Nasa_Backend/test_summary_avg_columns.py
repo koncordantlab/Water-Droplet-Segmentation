@@ -41,7 +41,32 @@ def check_resolution():
     print("OK resolution")
 
 
+def check_json_serializable_non_finite():
+    """Non-finite floats must serialize to JSON null: json.dumps emits a bare
+    NaN token otherwise, which JSON.parse in the SSE frontend rejects."""
+    import json
+    import numpy as np
+
+    assert app.make_json_serializable(float("nan")) is None
+    assert app.make_json_serializable(float("inf")) is None
+    assert app.make_json_serializable(float("-inf")) is None
+    assert app.make_json_serializable(np.float64("nan")) is None
+    row = {
+        "Water Avg Area (µm²)": float("nan"),
+        "Resolution (pix/µm²)": np.float64("inf"),
+        "Water (%)": 12.5,
+    }
+    clean = app.make_json_serializable([row])[0]
+    assert clean["Water Avg Area (µm²)"] is None, clean
+    assert clean["Resolution (pix/µm²)"] is None, clean
+    assert clean["Water (%)"] == 12.5, clean
+    # strict round-trip — same strictness as browser JSON.parse
+    json.loads(json.dumps(app.make_json_serializable([row]), allow_nan=False))
+    print("OK json_serializable non-finite")
+
+
 if __name__ == "__main__":
     check_avg_size_metrics()
     check_resolution()
+    check_json_serializable_non_finite()
     print("\nALL CHECKS PASSED")
