@@ -99,6 +99,30 @@ def check_metrics_modes():
     print("OK metrics modes")
 
 
+def check_instance_id_sequential_with_empty_mask():
+    """Empty masks are skipped, but instance_id must stay sequential 1..N
+    (per per_frame_xlsx_schema.md) — no gaps from the skipped indices."""
+    H, W = 20, 40
+    m1 = np.zeros((H, W), np.uint8)
+    m1[2:6, 2:6] = 1
+    m_empty = np.zeros((H, W), np.uint8)  # zero area -> skipped
+    m3 = np.zeros((H, W), np.uint8)
+    m3[10:13, 20:23] = 1
+    masks = [m1, m_empty, m3]
+    boxes = [
+        _FakeBox(0.9, [2, 2, 6, 6]),
+        _FakeBox(0.5, [0, 0, 1, 1]),
+        _FakeBox(0.8, [20, 10, 23, 13]),
+    ]
+    names = ["water", "ice", "ice"]
+    for mode in ("basic", "full"):
+        rows = app._per_instance_metrics(masks, boxes, names, (H, W), mode=mode)
+        ids = [r["instance_id"] for r in rows]
+        assert ids == [1, 2], (mode, ids)
+        assert [r["class"] for r in rows] == ["water", "ice"], rows
+    print("OK instance_id sequential with empty mask")
+
+
 def check_save_modes():
     masks, boxes, names, shape = _synthetic()
     meta = {"video_name": "t.mp4", "fps": 30, "stride": 30, "width": 40, "height": 20}
@@ -152,5 +176,6 @@ def check_save_modes():
 if __name__ == "__main__":
     check_apply_metric()
     check_metrics_modes()
+    check_instance_id_sequential_with_empty_mask()
     check_save_modes()
     print("\nALL CHECKS PASSED")

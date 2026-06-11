@@ -459,13 +459,11 @@ def _per_instance_metrics(full_bin_masks, boxes, class_names, frame_shape, mode=
         if area == 0:
             continue
 
-        ys, xs = np.where(fm > 0)
-        cx, cy = float(xs.mean()), float(ys.mean())
         eq_d = float(np.sqrt(4.0 * area / np.pi))
 
         if mode == "basic":
             rows.append({
-                "instance_id": idx + 1,
+                "instance_id": len(rows) + 1,
                 "class": class_names[idx],
                 "confidence": round(float(box.conf.item()), 4),
                 "pixel_count": area,
@@ -473,6 +471,8 @@ def _per_instance_metrics(full_bin_masks, boxes, class_names, frame_shape, mode=
             })
             continue
 
+        ys, xs = np.where(fm > 0)
+        cx, cy = float(xs.mean()), float(ys.mean())
         bx1, by1, bx2, by2 = [float(v) for v in box.xyxy[0].cpu().numpy()]
         bw, bh = bx2 - bx1, by2 - by1
         bbox_area = bw * bh
@@ -508,7 +508,7 @@ def _per_instance_metrics(full_bin_masks, boxes, class_names, frame_shape, mode=
         )
         oi = overlap_info[idx]
         rows.append({
-            "instance_id": idx + 1,
+            "instance_id": len(rows) + 1,
             "class": class_names[idx],
             "confidence": round(float(box.conf.item()), 4),
             "pixel_count": area,
