@@ -846,7 +846,7 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
         def process_batch(batch_frames, batch_counts):
             nonlocal rows, overlap_totals, size_checkpoints_raw, last_frame_areas
             nonlocal per_frame_instance_rows, last_frame_raw, all_water_areas, all_ice_areas
-            results_list = model(batch_frames, imgsz=640, verbose=False)
+            results_list = model(batch_frames, imgsz=640, max_det=1500, verbose=False)
 
             for i, res in enumerate(results_list):
                 original_frame = batch_frames[i]
@@ -1150,6 +1150,39 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
 
 tasks = {}
 
+# Seconds the SSE stream waits on the queue before deciding whether the worker
+# has gone silent. A healthy worker can exceed this during the file-saving tail
+# (chart PNGs + per-frame xlsx), so an idle gap is NOT on its own a failure.
+SSE_IDLE_TIMEOUT = 300
+
+
+def _sse_idle_decision(task):
+    """Decide what an SSE stream should do after an idle (queue-empty) gap.
+
+    ``task`` is ``tasks.get(task_id)`` — the task record, or ``None`` if it was
+    already popped. Returns ``"keep-alive"`` when the worker is still running
+    (record present and not yet completed), meaning the stream should emit a
+    heartbeat comment and keep waiting; returns ``"timeout"`` when the task is
+    gone or finished, meaning the stream should report a real timeout and close.
+    """
+    if task is not None and not task.get("completed"):
+        return "keep-alive"
+    return "timeout"
+
+
+def _mark_task_completed(task_id):
+    """Mark a task completed, tolerating the SSE side having already popped it.
+
+    Returns ``True`` if the record still existed and was updated, ``False`` if
+    it was already removed (e.g. the client disconnected). This keeps the worker
+    thread from raising ``KeyError`` in its ``finally`` after doing all its work.
+    """
+    if task_id in tasks:
+        tasks[task_id]["completed"] = True
+        return True
+    return False
+
+
 # REST API endpoints (synchronous) -------------------------------------------
 @server.route('/api/process', methods=['POST'])
 def api_process():
@@ -1328,7 +1361,11 @@ def api_process():
             traceback.print_exc()
             task_queue.put_nowait({"status": "error", "message": f"An error occurred: {e}"})
         finally:
-            tasks[task_id]["completed"] = True
+            # The SSE stream may have already popped this task (e.g. the client
+            # disconnected, or an earlier idle-timeout fired). Don't assume the
+            # entry still exists — guard the lookup so a healthy worker can't
+            # crash here after doing all its real work.
+            _mark_task_completed(task_id)
             task_queue.put_nowait({"__done__": True})
             
     t = threading.Thread(target=worker, daemon=True)
@@ -1347,8 +1384,18 @@ def api_events(task_id):
     def event_stream():
         while True:
             try:
-                ev = task_queue.get(timeout=300)
+                ev = task_queue.get(timeout=SSE_IDLE_TIMEOUT)
             except Empty:
+                # A healthy worker can go silent for well over 5 minutes during
+                # the tail phases (saving chart PNGs and the per-frame xlsx
+                # files), which push no progress events. Don't mistake that
+                # silence for a dead worker and tear the task down underneath
+                # it: while the task still exists and isn't finished, send an
+                # SSE keep-alive comment (EventSource ignores comment lines) and
+                # keep waiting. Only report a real timeout if the task is gone.
+                if _sse_idle_decision(tasks.get(task_id)) == "keep-alive":
+                    yield ": keep-alive\n\n"
+                    continue
                 yield f"data: {json.dumps({'status': 'error', 'message': 'Timeout: No updates for 5 minutes'})}\n\n"
                 break
             if ev is None:
