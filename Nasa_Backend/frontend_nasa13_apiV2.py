@@ -46,9 +46,13 @@ def blend_mask(base_img, mask, color, alpha):
     base_img[idx] = base_img[idx] * (1 - alpha) + np.array(color) * alpha
     return base_img
 
-def apply_full_overlay(img, masks_np, class_names, mask_thresh=0.3):
+def apply_full_overlay(img, masks_np, class_names, mask_thresh=0.3, full_masks=None):
     h, w = img.shape[:2]
-    full_masks = [cv2.resize((m > mask_thresh).astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) for m in masks_np]
+    # full_masks may be supplied pre-computed (already thresholded + resized to
+    # (h, w)) so the overlay reuses the GPU-resized masks instead of resizing a
+    # third time. When omitted, fall back to the original per-mask cv2 resize.
+    if full_masks is None:
+        full_masks = [cv2.resize((m > mask_thresh).astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) for m in masks_np]
     water_union, ice_union = np.zeros((h, w), dtype=np.uint8), np.zeros((h, w), dtype=np.uint8)
     for fm, cls in zip(full_masks, class_names):
         if cls == "water": water_union |= fm
@@ -70,6 +74,122 @@ def apply_full_overlay(img, masks_np, class_names, mask_thresh=0.3):
     base = blend_mask(base, ii_mask, OVERLAP_COLORS["ii"], ALPHA_OVERLAP)
     base = blend_mask(base, wi_mask, OVERLAP_COLORS["wi"], ALPHA_OVERLAP)
     return np.clip(base, 0, 255).astype(np.uint8)
+
+
+# Cache of cv2 INTER_NEAREST source-index maps, keyed by (src_len, dst_len). The
+# map is tiny (length dst) and identical for every mask that shares a resize, so
+# it is derived once per shape pair and reused.
+_NN_INDEX_MAP_CACHE = {}
+
+
+def _nn_resize_index_map(src_len, dst_len):
+    """Source indices cv2.resize(..., INTER_NEAREST) picks along one axis.
+
+    Derived by probing cv2 itself with a labelled row, so the mapping is
+    *exactly* OpenCV's nearest-neighbour rule for the installed build rather than
+    a re-derived formula that might disagree at boundaries. Returns an int64
+    array of length ``dst_len`` with values in ``[0, src_len - 1]``.
+    """
+    key = (int(src_len), int(dst_len))
+    cached = _NN_INDEX_MAP_CACHE.get(key)
+    if cached is None:
+        probe = np.arange(src_len, dtype=np.float32).reshape(1, src_len)
+        picks = cv2.resize(probe, (int(dst_len), 1), interpolation=cv2.INTER_NEAREST)
+        cached = picks.reshape(int(dst_len)).astype(np.int64)
+        _NN_INDEX_MAP_CACHE[key] = cached
+    return cached
+
+
+def _threshold_masks(prob, thresh=0.3):
+    """Binarise a stack of float masks on its own device. uint8, same shape."""
+    return (prob > thresh).to(torch.uint8)
+
+
+def _gather_resize_nn(binm, dst_h, dst_w):
+    """Nearest-resize a uint8 mask stack to (dst_h, dst_w) via cv2's index map.
+
+    Pure gather (index_select) using cv2's own nearest index map — NOT torch
+    interpolation, whose 'nearest' convention differs from OpenCV's — so the
+    result is bit-identical to cv2.resize(INTER_NEAREST) on GPU and CPU alike.
+    """
+    src_h, src_w = int(binm.shape[-2]), int(binm.shape[-1])
+    y_map = torch.as_tensor(_nn_resize_index_map(src_h, dst_h), device=binm.device)
+    x_map = torch.as_tensor(_nn_resize_index_map(src_w, dst_w), device=binm.device)
+    return binm.index_select(-2, y_map).index_select(-1, x_map)
+
+
+def _resize_bin_masks_nn(prob, dst_h, dst_w, thresh=0.3):
+    """Threshold a stack of float masks and nearest-resize them to full res.
+
+    ``prob`` is a torch tensor of shape (N, src_h, src_w) on any device. Returns
+    a uint8 (N, dst_h, dst_w) tensor on the *same* device, bit-identical to
+    ``stack(cv2.resize((prob[k] > thresh).astype(uint8), (dst_w, dst_h),
+    INTER_NEAREST) for k)``. See test_gpu_mask_equivalence.py.
+    """
+    return _gather_resize_nn(_threshold_masks(prob, thresh), dst_h, dst_w)
+
+
+def _mask_areas_from_source(binm, dst_h, dst_w):
+    """Per-instance full-resolution pixel areas, straight from the source masks.
+
+    ``binm`` is a (N, src_h, src_w) uint8 tensor of 0/1 values. Returns an (N,)
+    int64 numpy array exactly equal to
+    ``[int(cv2.resize(binm[k], (dst_w, dst_h), INTER_NEAREST).sum()) for k]`` —
+    *without* materialising the (N, dst_h, dst_w) masks. Nearest upsampling
+    replicates each source pixel (i, j) exactly ``cy[i] * cx[j]`` times, where
+    cy[i] / cx[j] are how many destination rows / cols map onto that source row /
+    col (the bincount of cv2's nearest index map). Pure integer arithmetic on the
+    masks' device, so it is exact (no float rounding) and only an (N,) vector
+    crosses to the CPU — not the multi-GB full-res masks. See
+    test_gpu_mask_equivalence.py.
+    """
+    src_h, src_w = int(binm.shape[-2]), int(binm.shape[-1])
+    cy = np.bincount(_nn_resize_index_map(src_h, dst_h), minlength=src_h).astype(np.int32)
+    cx = np.bincount(_nn_resize_index_map(src_w, dst_w), minlength=src_w).astype(np.int32)
+    cy_t = torch.as_tensor(cy, device=binm.device).view(1, src_h, 1)
+    cx_t = torch.as_tensor(cx, device=binm.device).view(1, 1, src_w)
+    weight = cy_t * cx_t                                   # (1, src_h, src_w) int32
+    areas = (binm.to(torch.int32) * weight).sum(dim=(1, 2), dtype=torch.int64)
+    return areas.cpu().numpy()
+
+
+def _overlap_exists_matrix(masks_2d):
+    """(N, N) bool: whether masks k and j share at least one set pixel.
+
+    ``masks_2d`` is an (N, P) torch tensor of 0/1 values. Computed as
+    ``(M @ Mᵀ) > 0`` in float32: every product is an exact 0 or 1 and the
+    accumulation is non-negative, so a pair that shares no pixel sums to exactly
+    0.0 and a pair that shares any pixel sums to ≥ 1.0 — the ``> 0`` test is
+    therefore exact regardless of accumulation order or TF32, and reproduces
+    ``np.any(mask_k & mask_j)`` bit-for-bit (test_gpu_mask_equivalence.py).
+    """
+    n = int(masks_2d.shape[0])
+    if n == 0:
+        return torch.zeros((0, 0), dtype=torch.bool, device=masks_2d.device)
+    m = masks_2d.to(torch.float32)
+    return (m @ m.t()) > 0
+
+
+def _classify_overlaps(exists_matrix, class_names):
+    """Tally (ww, ii, mixed) over unordered overlapping pairs.
+
+    ``exists_matrix`` is an (N, N) bool array (numpy) whose [k, j] entry marks
+    whether instances k and j overlap. Matches the original nested loop exactly:
+    a pair counts as ``ww`` only if both classes are "water", ``ii`` only if both
+    are "ice", and ``mixed`` for everything else (incl. any non-water/ice class).
+    """
+    n = len(class_names)
+    if n == 0:
+        return 0, 0, 0
+    cls = np.array([1 if c == "water" else (2 if c == "ice" else 0) for c in class_names])
+    iu, ju = np.triu_indices(n, k=1)
+    ex = np.asarray(exists_matrix)[iu, ju].astype(bool)
+    ci, cj = cls[iu], cls[ju]
+    ww = int(np.count_nonzero(ex & (ci == 1) & (cj == 1)))
+    ii = int(np.count_nonzero(ex & (ci == 2) & (cj == 2)))
+    mixed = int(np.count_nonzero(ex) - ww - ii)
+    return ww, ii, mixed
+
 
 # ── 2) Dash App Setup ───────────────────────────────────────────────────────
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
@@ -417,7 +537,7 @@ def _save_size_distribution_pngs(size_distribution, charts_dir, video_fname_base
         plt.close(fig)
 
 
-def _per_instance_metrics(full_bin_masks, boxes, class_names, frame_shape, mode="full"):
+def _per_instance_metrics(full_bin_masks, boxes, class_names, frame_shape, mode="full", areas=None):
     """Compute per-instance shape descriptors for one frame.
 
     mode: "full" (default) returns the rich descriptor set below. "basic" returns
@@ -425,10 +545,15 @@ def _per_instance_metrics(full_bin_masks, boxes, class_names, frame_shape, mode=
         all contour/ellipse/overlap work, so it is also faster.
 
     full_bin_masks: list of (H, W) uint8 binary masks, already resized to the
-        original frame resolution (same objects used for overlap counting).
+        original frame resolution (same objects used for overlap counting). May be
+        ``None`` in basic mode when ``areas`` is supplied — basic mode only needs
+        the per-instance pixel area, so the full-res masks are never built.
     boxes: ultralytics Boxes object — provides per-instance confidence + bbox.
-    class_names: list of lowercased class strings, parallel to full_bin_masks.
+    class_names: list of lowercased class strings, parallel to the detections.
     frame_shape: (H, W) tuple of the original frame.
+    areas: optional precomputed per-instance pixel areas (e.g. from
+        _mask_areas_from_source). When omitted, areas are summed from
+        full_bin_masks, reproducing the original behaviour exactly.
 
     Returns a list of dicts (one per non-empty instance). Mask area is the
     full pixel sum; contour-based metrics (perimeter, circularity, feret, etc.)
@@ -436,7 +561,9 @@ def _per_instance_metrics(full_bin_masks, boxes, class_names, frame_shape, mode=
     for any well-formed YOLO instance mask.
     """
     H, W = frame_shape
-    n = len(full_bin_masks)
+    n = len(boxes)
+    if areas is None:
+        areas = [int(full_bin_masks[k].sum()) for k in range(n)]
 
     overlap_info = [{"count": 0, "classes": set(), "pixels": 0} for _ in range(n)]
     if mode != "basic":
@@ -454,8 +581,9 @@ def _per_instance_metrics(full_bin_masks, boxes, class_names, frame_shape, mode=
                 overlap_info[j]["classes"].add(class_names[i])
 
     rows = []
-    for idx, (fm, box) in enumerate(zip(full_bin_masks, boxes)):
-        area = int(fm.sum())
+    for idx in range(n):
+        area = int(areas[idx])
+        box = boxes[idx]
         if area == 0:
             continue
 
@@ -471,6 +599,7 @@ def _per_instance_metrics(full_bin_masks, boxes, class_names, frame_shape, mode=
             })
             continue
 
+        fm = full_bin_masks[idx]
         ys, xs = np.where(fm > 0)
         cx, cy = float(xs.mean()), float(ys.mean())
         bx1, by1, bx2, by2 = [float(v) for v in box.xyxy[0].cpu().numpy()]
@@ -839,14 +968,14 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
         # Raw data for the most recent non-empty frame; used to write the final
         # frame's per-instance xlsx even when it isn't on a dist_interval boundary.
         last_frame_raw = {
-            "frame": 0, "full_bin_masks": None, "boxes": None,
+            "frame": 0, "full_bin_masks": None, "areas": None, "boxes": None,
             "class_names": None, "frame_shape": None,
         }
 
         def process_batch(batch_frames, batch_counts):
             nonlocal rows, overlap_totals, size_checkpoints_raw, last_frame_areas
             nonlocal per_frame_instance_rows, last_frame_raw, all_water_areas, all_ice_areas
-            results_list = model(batch_frames, imgsz=640, max_det=1500, verbose=False)
+            results_list = model(batch_frames, imgsz=640, max_det=2000, verbose=False)
 
             for i, res in enumerate(results_list):
                 original_frame = batch_frames[i]
@@ -859,13 +988,31 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
                 frame_water_areas, frame_ice_areas = [], []
 
                 if res.masks is not None and len(res.boxes):
-                    masks_np = res.masks.data.cpu().numpy()
                     class_names = [res.names[int(b.cls)].lower() for b in res.boxes]
-                    bin_masks = [(m > 0.3).astype(np.uint8) for m in masks_np]
+                    binm = _threshold_masks(res.masks.data, 0.3)     # (N, mh, mw) uint8, on device
+                    mh, mw = int(binm.shape[-2]), int(binm.shape[-1])
 
-                    for fm, box in zip(bin_masks, res.boxes):
-                        full_m = cv2.resize(fm, (w, h), interpolation=cv2.INTER_NEAREST)
-                        area = int(full_m.sum())
+                    # Per-instance full-res pixel areas computed on the masks'
+                    # device straight from the source masks (multiplicity trick):
+                    # exact (== the old int(cv2.resize(...).sum())) but only an
+                    # (N,) vector crosses to the CPU, not the multi-GB full-res
+                    # masks. See test_gpu_mask_equivalence.py.
+                    areas = _mask_areas_from_source(binm, h, w)
+
+                    # Build the full-res CPU masks ONLY when something needs them:
+                    # the overlay (every frame) or full-mode per-instance contour
+                    # metrics (checkpoints + the final-frame stash). In basic mode
+                    # without overlay they are never built, which removes the
+                    # per-frame ~N·h·w GPU→CPU transfer and matching GPU alloc.
+                    need_full_masks = save_ovl or (output_mode != "basic" and dist_interval > 0)
+                    if need_full_masks:
+                        full_np = _gather_resize_nn(binm, h, w).cpu().numpy()
+                        full_masks_for_overlap = [full_np[k] for k in range(full_np.shape[0])]
+                    else:
+                        full_masks_for_overlap = None
+
+                    for idx, box in enumerate(res.boxes):
+                        area = int(areas[idx])
                         cls_name = res.names[int(box.cls)].lower()
                         if cls_name == "water":
                             water_cnt += 1
@@ -879,41 +1026,48 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
                                 frame_ice_areas.append(area)
                         confs.append(box.conf.item())
 
-                    full_masks_for_overlap = [cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST) for m in bin_masks]
-                    for k in range(len(full_masks_for_overlap)):
-                        for j in range(k + 1, len(full_masks_for_overlap)):
-                            inter = full_masks_for_overlap[k] & full_masks_for_overlap[j]
-                            if not np.any(inter):
-                                continue
-                            nk, nj = class_names[k], class_names[j]
-                            if nk == nj == "water":
-                                overlap_totals["ww"] += 1
-                                ww_count += 1
-                            elif nk == nj == "ice":
-                                overlap_totals["ii"] += 1
-                                ii_count += 1
-                            else:
-                                overlap_totals["mixed"] += 1
-                                wi_count += 1
+                    # Pairwise overlap on the masks' device instead of an O(N²)
+                    # Python loop over full-res numpy masks. For nearest
+                    # upsampling (both axes scaled up) overlap at source
+                    # resolution is identical to overlap at full resolution, so
+                    # use the small source masks (cheap, low memory) and fall
+                    # back to full-res only when downscaling. The (ww, ii, mixed)
+                    # tally matches the original loop bit-for-bit — see
+                    # test_gpu_mask_equivalence.py.
+                    overlap_src = binm if (h >= mh and w >= mw) else _gather_resize_nn(binm, h, w)
+                    exists = _overlap_exists_matrix(
+                        overlap_src.reshape(overlap_src.shape[0], -1)
+                    ).cpu().numpy()
+                    ww_count, ii_count, wi_count = _classify_overlaps(exists, class_names)
+                    overlap_totals["ww"] += ww_count
+                    overlap_totals["ii"] += ii_count
+                    overlap_totals["mixed"] += wi_count
 
                     if save_ovl and out_video_writer is not None:
-                        overlay_frame = apply_full_overlay(original_frame, masks_np, class_names)
+                        # Reuse the GPU-resized masks instead of resizing a third
+                        # time; identical output (test_gpu_mask_equivalence.py).
+                        overlay_frame = apply_full_overlay(original_frame, None, class_names,
+                                                           full_masks=full_masks_for_overlap)
                         out_video_writer.write(cv2.cvtColor(overlay_frame, cv2.COLOR_RGB2BGR))
 
                     # Capture raw segments + per-instance metrics at size-distribution
                     # checkpoints; also stash the latest raw segments so the final
-                    # frame can be written even when it isn't on a checkpoint.
+                    # frame can be written even when it isn't on a checkpoint. In
+                    # basic mode full_bin_masks is None and the areas alone drive
+                    # the per-instance rows.
                     if dist_interval > 0:
                         last_frame_raw = {
                             "frame": current_processed_frame,
                             "full_bin_masks": full_masks_for_overlap,
+                            "areas": areas,
                             "boxes": res.boxes,
                             "class_names": list(class_names),
                             "frame_shape": (h, w),
                         }
                         if current_processed_frame % dist_interval == 0:
                             per_frame_instance_rows[current_processed_frame] = _per_instance_metrics(
-                                full_masks_for_overlap, res.boxes, class_names, (h, w), mode=output_mode
+                                full_masks_for_overlap, res.boxes, class_names, (h, w),
+                                mode=output_mode, areas=areas,
                             )
 
                 water_pct = (water_area / total_px * 100) if total_px else 0
@@ -1098,7 +1252,7 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
             # plus the final non-empty processed frame so users always get the
             # latest snapshot regardless of where it lands relative to dist_interval.
             if (
-                last_frame_raw["full_bin_masks"] is not None
+                last_frame_raw["areas"] is not None
                 and last_frame_raw["frame"] not in per_frame_instance_rows
             ):
                 per_frame_instance_rows[last_frame_raw["frame"]] = _per_instance_metrics(
@@ -1107,6 +1261,7 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
                     last_frame_raw["class_names"],
                     last_frame_raw["frame_shape"],
                     mode=output_mode,
+                    areas=last_frame_raw["areas"],
                 )
 
             per_frame_xlsx_dir = os.path.join(base_dir, f"{video_fname_base}_per_frame_xlsx")
