@@ -58,7 +58,7 @@ export default function App() {
     setSliderValue(n);
   }, [rows]);
 
-  const handleSubmit = async (ev, videoPath, isSegmentationOn, distInterval = 0) => {
+  const handleSubmit = async (ev, videoPath, isSegmentationOn, distInterval = 0, outputMode = "full", umPerPx = "") => {
     if (ev && ev.preventDefault) ev.preventDefault();
 
     setError(null);
@@ -85,6 +85,8 @@ export default function App() {
           video_path: videoPath,
           save_overlay: isSegmentationOn,
           dist_interval: Number(distInterval) || 0,
+          output_mode: outputMode,
+          um_per_px: umPerPx === "" ? null : Number(umPerPx),
         }),
       });
 

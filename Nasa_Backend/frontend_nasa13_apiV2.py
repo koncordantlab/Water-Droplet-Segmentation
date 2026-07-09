@@ -1,5 +1,6 @@
 import time
 start = time.time()
+import math
 import os
 import cv2
 import numpy as np
@@ -45,9 +46,13 @@ def blend_mask(base_img, mask, color, alpha):
     base_img[idx] = base_img[idx] * (1 - alpha) + np.array(color) * alpha
     return base_img
 
-def apply_full_overlay(img, masks_np, class_names, mask_thresh=0.3):
+def apply_full_overlay(img, masks_np, class_names, mask_thresh=0.3, full_masks=None):
     h, w = img.shape[:2]
-    full_masks = [cv2.resize((m > mask_thresh).astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) for m in masks_np]
+    # full_masks may be supplied pre-computed (already thresholded + resized to
+    # (h, w)) so the overlay reuses the GPU-resized masks instead of resizing a
+    # third time. When omitted, fall back to the original per-mask cv2 resize.
+    if full_masks is None:
+        full_masks = [cv2.resize((m > mask_thresh).astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) for m in masks_np]
     water_union, ice_union = np.zeros((h, w), dtype=np.uint8), np.zeros((h, w), dtype=np.uint8)
     for fm, cls in zip(full_masks, class_names):
         if cls == "water": water_union |= fm
@@ -70,6 +75,122 @@ def apply_full_overlay(img, masks_np, class_names, mask_thresh=0.3):
     base = blend_mask(base, wi_mask, OVERLAP_COLORS["wi"], ALPHA_OVERLAP)
     return np.clip(base, 0, 255).astype(np.uint8)
 
+
+# Cache of cv2 INTER_NEAREST source-index maps, keyed by (src_len, dst_len). The
+# map is tiny (length dst) and identical for every mask that shares a resize, so
+# it is derived once per shape pair and reused.
+_NN_INDEX_MAP_CACHE = {}
+
+
+def _nn_resize_index_map(src_len, dst_len):
+    """Source indices cv2.resize(..., INTER_NEAREST) picks along one axis.
+
+    Derived by probing cv2 itself with a labelled row, so the mapping is
+    *exactly* OpenCV's nearest-neighbour rule for the installed build rather than
+    a re-derived formula that might disagree at boundaries. Returns an int64
+    array of length ``dst_len`` with values in ``[0, src_len - 1]``.
+    """
+    key = (int(src_len), int(dst_len))
+    cached = _NN_INDEX_MAP_CACHE.get(key)
+    if cached is None:
+        probe = np.arange(src_len, dtype=np.float32).reshape(1, src_len)
+        picks = cv2.resize(probe, (int(dst_len), 1), interpolation=cv2.INTER_NEAREST)
+        cached = picks.reshape(int(dst_len)).astype(np.int64)
+        _NN_INDEX_MAP_CACHE[key] = cached
+    return cached
+
+
+def _threshold_masks(prob, thresh=0.3):
+    """Binarise a stack of float masks on its own device. uint8, same shape."""
+    return (prob > thresh).to(torch.uint8)
+
+
+def _gather_resize_nn(binm, dst_h, dst_w):
+    """Nearest-resize a uint8 mask stack to (dst_h, dst_w) via cv2's index map.
+
+    Pure gather (index_select) using cv2's own nearest index map — NOT torch
+    interpolation, whose 'nearest' convention differs from OpenCV's — so the
+    result is bit-identical to cv2.resize(INTER_NEAREST) on GPU and CPU alike.
+    """
+    src_h, src_w = int(binm.shape[-2]), int(binm.shape[-1])
+    y_map = torch.as_tensor(_nn_resize_index_map(src_h, dst_h), device=binm.device)
+    x_map = torch.as_tensor(_nn_resize_index_map(src_w, dst_w), device=binm.device)
+    return binm.index_select(-2, y_map).index_select(-1, x_map)
+
+
+def _resize_bin_masks_nn(prob, dst_h, dst_w, thresh=0.3):
+    """Threshold a stack of float masks and nearest-resize them to full res.
+
+    ``prob`` is a torch tensor of shape (N, src_h, src_w) on any device. Returns
+    a uint8 (N, dst_h, dst_w) tensor on the *same* device, bit-identical to
+    ``stack(cv2.resize((prob[k] > thresh).astype(uint8), (dst_w, dst_h),
+    INTER_NEAREST) for k)``. See test_gpu_mask_equivalence.py.
+    """
+    return _gather_resize_nn(_threshold_masks(prob, thresh), dst_h, dst_w)
+
+
+def _mask_areas_from_source(binm, dst_h, dst_w):
+    """Per-instance full-resolution pixel areas, straight from the source masks.
+
+    ``binm`` is a (N, src_h, src_w) uint8 tensor of 0/1 values. Returns an (N,)
+    int64 numpy array exactly equal to
+    ``[int(cv2.resize(binm[k], (dst_w, dst_h), INTER_NEAREST).sum()) for k]`` —
+    *without* materialising the (N, dst_h, dst_w) masks. Nearest upsampling
+    replicates each source pixel (i, j) exactly ``cy[i] * cx[j]`` times, where
+    cy[i] / cx[j] are how many destination rows / cols map onto that source row /
+    col (the bincount of cv2's nearest index map). Pure integer arithmetic on the
+    masks' device, so it is exact (no float rounding) and only an (N,) vector
+    crosses to the CPU — not the multi-GB full-res masks. See
+    test_gpu_mask_equivalence.py.
+    """
+    src_h, src_w = int(binm.shape[-2]), int(binm.shape[-1])
+    cy = np.bincount(_nn_resize_index_map(src_h, dst_h), minlength=src_h).astype(np.int32)
+    cx = np.bincount(_nn_resize_index_map(src_w, dst_w), minlength=src_w).astype(np.int32)
+    cy_t = torch.as_tensor(cy, device=binm.device).view(1, src_h, 1)
+    cx_t = torch.as_tensor(cx, device=binm.device).view(1, 1, src_w)
+    weight = cy_t * cx_t                                   # (1, src_h, src_w) int32
+    areas = (binm.to(torch.int32) * weight).sum(dim=(1, 2), dtype=torch.int64)
+    return areas.cpu().numpy()
+
+
+def _overlap_exists_matrix(masks_2d):
+    """(N, N) bool: whether masks k and j share at least one set pixel.
+
+    ``masks_2d`` is an (N, P) torch tensor of 0/1 values. Computed as
+    ``(M @ Mᵀ) > 0`` in float32: every product is an exact 0 or 1 and the
+    accumulation is non-negative, so a pair that shares no pixel sums to exactly
+    0.0 and a pair that shares any pixel sums to ≥ 1.0 — the ``> 0`` test is
+    therefore exact regardless of accumulation order or TF32, and reproduces
+    ``np.any(mask_k & mask_j)`` bit-for-bit (test_gpu_mask_equivalence.py).
+    """
+    n = int(masks_2d.shape[0])
+    if n == 0:
+        return torch.zeros((0, 0), dtype=torch.bool, device=masks_2d.device)
+    m = masks_2d.to(torch.float32)
+    return (m @ m.t()) > 0
+
+
+def _classify_overlaps(exists_matrix, class_names):
+    """Tally (ww, ii, mixed) over unordered overlapping pairs.
+
+    ``exists_matrix`` is an (N, N) bool array (numpy) whose [k, j] entry marks
+    whether instances k and j overlap. Matches the original nested loop exactly:
+    a pair counts as ``ww`` only if both classes are "water", ``ii`` only if both
+    are "ice", and ``mixed`` for everything else (incl. any non-water/ice class).
+    """
+    n = len(class_names)
+    if n == 0:
+        return 0, 0, 0
+    cls = np.array([1 if c == "water" else (2 if c == "ice" else 0) for c in class_names])
+    iu, ju = np.triu_indices(n, k=1)
+    ex = np.asarray(exists_matrix)[iu, ju].astype(bool)
+    ci, cj = cls[iu], cls[ju]
+    ww = int(np.count_nonzero(ex & (ci == 1) & (cj == 1)))
+    ii = int(np.count_nonzero(ex & (ci == 2) & (cj == 2)))
+    mixed = int(np.count_nonzero(ex) - ww - ii)
+    return ww, ii, mixed
+
+
 # ── 2) Dash App Setup ───────────────────────────────────────────────────────
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
 server = app.server
@@ -82,14 +203,18 @@ def make_json_serializable(obj):
     # handle None
     if obj is None:
         return None
-    # primitives
-    if isinstance(obj, (str, int, float, bool)):
+    # primitives — non-finite floats become null: json.dumps would emit a bare
+    # NaN/Infinity token, which JSON.parse rejects on the SSE frontend
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, (str, int, bool)):
         return obj
     # numpy scalar types
     if isinstance(obj, (np.integer,)):
         return int(obj)
     if isinstance(obj, (np.floating,)):
-        return float(obj)
+        f = float(obj)
+        return f if math.isfinite(f) else None
     if isinstance(obj, (np.bool_,)):
         return bool(obj)
     # numpy arrays
@@ -412,6 +537,337 @@ def _save_size_distribution_pngs(size_distribution, charts_dir, video_fname_base
         plt.close(fig)
 
 
+def _per_instance_metrics(full_bin_masks, boxes, class_names, frame_shape, mode="full", areas=None):
+    """Compute per-instance shape descriptors for one frame.
+
+    mode: "full" (default) returns the rich descriptor set below. "basic" returns
+        only instance_id, class, confidence, pixel_count, eq_diameter_px and skips
+        all contour/ellipse/overlap work, so it is also faster.
+
+    full_bin_masks: list of (H, W) uint8 binary masks, already resized to the
+        original frame resolution (same objects used for overlap counting). May be
+        ``None`` in basic mode when ``areas`` is supplied — basic mode only needs
+        the per-instance pixel area, so the full-res masks are never built.
+    boxes: ultralytics Boxes object — provides per-instance confidence + bbox.
+    class_names: list of lowercased class strings, parallel to the detections.
+    frame_shape: (H, W) tuple of the original frame.
+    areas: optional precomputed per-instance pixel areas (e.g. from
+        _mask_areas_from_source). When omitted, areas are summed from
+        full_bin_masks, reproducing the original behaviour exactly.
+
+    Returns a list of dicts (one per non-empty instance). Mask area is the
+    full pixel sum; contour-based metrics (perimeter, circularity, feret, etc.)
+    are computed on the largest connected component, which is the dominant blob
+    for any well-formed YOLO instance mask.
+    """
+    H, W = frame_shape
+    n = len(boxes)
+    if areas is None:
+        areas = [int(full_bin_masks[k].sum()) for k in range(n)]
+
+    overlap_info = [{"count": 0, "classes": set(), "pixels": 0} for _ in range(n)]
+    if mode != "basic":
+        for i in range(n):
+            for j in range(i + 1, n):
+                inter = full_bin_masks[i] & full_bin_masks[j]
+                inter_px = int(inter.sum())
+                if inter_px == 0:
+                    continue
+                overlap_info[i]["count"] += 1
+                overlap_info[i]["pixels"] += inter_px
+                overlap_info[i]["classes"].add(class_names[j])
+                overlap_info[j]["count"] += 1
+                overlap_info[j]["pixels"] += inter_px
+                overlap_info[j]["classes"].add(class_names[i])
+
+    rows = []
+    for idx in range(n):
+        area = int(areas[idx])
+        box = boxes[idx]
+        if area == 0:
+            continue
+
+        eq_d = float(np.sqrt(4.0 * area / np.pi))
+
+        if mode == "basic":
+            rows.append({
+                "instance_id": len(rows) + 1,
+                "class": class_names[idx],
+                "confidence": round(float(box.conf.item()), 4),
+                "pixel_count": area,
+                "eq_diameter_px": round(eq_d, 3),
+            })
+            continue
+
+        fm = full_bin_masks[idx]
+        ys, xs = np.where(fm > 0)
+        cx, cy = float(xs.mean()), float(ys.mean())
+        bx1, by1, bx2, by2 = [float(v) for v in box.xyxy[0].cpu().numpy()]
+        bw, bh = bx2 - bx1, by2 - by1
+        bbox_area = bw * bh
+
+        contours, _ = cv2.findContours(fm, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        perimeter = circularity = solidity = feret_max = None
+        ellipse_major = ellipse_minor = ellipse_ecc = ellipse_angle = None
+        if contours:
+            cnt = max(contours, key=cv2.contourArea)
+            perimeter = float(cv2.arcLength(cnt, True))
+            if perimeter > 0:
+                circularity = float(4.0 * np.pi * area / (perimeter ** 2))
+            hull = cv2.convexHull(cnt)
+            hull_area = float(cv2.contourArea(hull))
+            if hull_area > 0:
+                solidity = float(area / hull_area)
+            hull_pts = hull.reshape(-1, 2)
+            if len(hull_pts) >= 2:
+                diffs = hull_pts[:, None, :] - hull_pts[None, :, :]
+                feret_max = float(np.sqrt((diffs ** 2).sum(-1).max()))
+            if len(cnt) >= 5:
+                _, (ax_a, ax_b), e_angle = cv2.fitEllipse(cnt)
+                ellipse_major = float(max(ax_a, ax_b))
+                ellipse_minor = float(min(ax_a, ax_b))
+                ellipse_angle = float(e_angle)
+                if ellipse_major > 0:
+                    ratio = ellipse_minor / ellipse_major
+                    ellipse_ecc = float(np.sqrt(max(0.0, 1.0 - ratio * ratio)))
+
+        extent = float(area / bbox_area) if bbox_area > 0 else None
+        touches_border = bool(
+            xs.min() == 0 or ys.min() == 0 or xs.max() == W - 1 or ys.max() == H - 1
+        )
+        oi = overlap_info[idx]
+        rows.append({
+            "instance_id": len(rows) + 1,
+            "class": class_names[idx],
+            "confidence": round(float(box.conf.item()), 4),
+            "pixel_count": area,
+            "eq_diameter_px": round(eq_d, 3),
+            "centroid_x": round(cx, 2),
+            "centroid_y": round(cy, 2),
+            "bbox_x1": round(bx1, 2),
+            "bbox_y1": round(by1, 2),
+            "bbox_x2": round(bx2, 2),
+            "bbox_y2": round(by2, 2),
+            "bbox_width": round(bw, 2),
+            "bbox_height": round(bh, 2),
+            "bbox_area": round(bbox_area, 2),
+            "bbox_aspect_ratio": round(bw / bh, 3) if bh > 0 else None,
+            "extent": round(extent, 3) if extent is not None else None,
+            "perimeter_px": round(perimeter, 2) if perimeter is not None else None,
+            "circularity": round(circularity, 3) if circularity is not None else None,
+            "solidity": round(solidity, 3) if solidity is not None else None,
+            "feret_diameter_max_px": round(feret_max, 2) if feret_max is not None else None,
+            "ellipse_major_axis_px": round(ellipse_major, 2) if ellipse_major is not None else None,
+            "ellipse_minor_axis_px": round(ellipse_minor, 2) if ellipse_minor is not None else None,
+            "ellipse_eccentricity": round(ellipse_ecc, 3) if ellipse_ecc is not None else None,
+            "ellipse_angle_deg": round(ellipse_angle, 2) if ellipse_angle is not None else None,
+            "touches_border": touches_border,
+            "overlap_count": oi["count"],
+            "overlap_classes": ",".join(sorted(oi["classes"])) if oi["classes"] else "",
+            "overlap_pixels_total": oi["pixels"],
+        })
+    return rows
+
+
+def _stats_row(class_name, values):
+    """One row of summary stats for a class's eq-diameter list."""
+    if not values:
+        return {
+            "class": class_name, "count": 0,
+            "min": None, "max": None, "mean": None, "median": None, "std": None,
+        }
+    arr = np.asarray(values, dtype=float)
+    return {
+        "class": class_name,
+        "count": int(arr.size),
+        "min": round(float(arr.min()), 3),
+        "max": round(float(arr.max()), 3),
+        "mean": round(float(arr.mean()), 3),
+        "median": round(float(np.median(arr)), 3),
+        "std": round(float(arr.std()), 3),
+    }
+
+
+def _apply_metric(rows, um_per_px):
+    """Add eq_diameter_um and area_um2 to each instance row, in place.
+
+    eq_diameter_um = eq_diameter_px * um_per_px
+    area_um2       = pixel_count * um_per_px**2
+    Both are np.nan when um_per_px is missing or <= 0. Returns the same list.
+    """
+    valid = isinstance(um_per_px, (int, float)) and not isinstance(um_per_px, bool) and um_per_px > 0
+    for r in rows:
+        if valid:
+            r["eq_diameter_um"] = round(r["eq_diameter_px"] * um_per_px, 3)
+            r["area_um2"] = round(r["pixel_count"] * (um_per_px ** 2), 3)
+        else:
+            r["eq_diameter_um"] = np.nan
+            r["area_um2"] = np.nan
+    return rows
+
+
+def _avg_size_metrics(areas_px, um_per_px):
+    """Mean droplet area (µm²) and mean equivalent-circular diameter (µm) over a
+    list of per-instance pixel areas. Diameter is computed per droplet
+    (sqrt(4*a/pi)) then averaged. Returns (nan, nan) when the scale is
+    missing/≤0 or the list is empty."""
+    if not areas_px or not um_per_px or um_per_px <= 0:
+        return float("nan"), float("nan")
+    arr = np.asarray(areas_px, dtype=float)
+    avg_area_um2 = float(arr.mean()) * (um_per_px ** 2)
+    avg_dia_um = float(np.sqrt(4.0 * arr / np.pi).mean()) * um_per_px
+    return avg_area_um2, avg_dia_um
+
+
+def _resolution_pix_per_um2(um_per_px):
+    """Calibration constant: pixels per square micron = 1/um_per_px².
+    NaN when the scale is missing/≤0."""
+    if not um_per_px or um_per_px <= 0:
+        return float("nan")
+    return 1.0 / (um_per_px ** 2)
+
+
+def _histogram_df(values, edges):
+    """Build a long-format histogram DataFrame using pre-computed bin edges.
+    `edges` must be the same global edges that drive `size_distribution` so the
+    per-frame xlsx matches the on-screen plot bar-for-bar.
+    """
+    if edges is None or len(edges) < 2:
+        return pd.DataFrame(columns=["bin_lo", "bin_hi", "bin_center", "count"])
+    edges_arr = np.asarray(edges, dtype=float)
+    if values:
+        counts, _ = np.histogram(np.asarray(values, dtype=float), bins=edges_arr)
+    else:
+        counts = np.zeros(len(edges_arr) - 1, dtype=int)
+    lo = edges_arr[:-1]
+    hi = edges_arr[1:]
+    return pd.DataFrame({
+        "bin_lo": np.round(lo, 3),
+        "bin_hi": np.round(hi, 3),
+        "bin_center": np.round((lo + hi) / 2.0, 3),
+        "count": counts.astype(int),
+    })
+
+
+def _global_bin_edges_from_size_distribution(size_distribution, class_key):
+    """Pull the shared log-spaced bin edges for a class from any non-degenerate
+    checkpoint. Returns None if size_distribution is missing or every checkpoint
+    has fewer than 2 edges (no data for the class).
+    """
+    if not size_distribution or not size_distribution.get("checkpoints"):
+        return None
+    for cp in size_distribution["checkpoints"]:
+        edges = cp.get(class_key, {}).get("histogram", {}).get("bin_edges") or []
+        if len(edges) >= 2:
+            return edges
+    return None
+
+
+def _save_per_frame_instance_xlsx(per_frame_rows, out_dir, video_base, video_meta,
+                                  size_distribution=None, mode="full", um_per_px=None):
+    """Write one xlsx per checkpoint frame, listing every detected instance.
+
+    per_frame_rows: dict mapping processed_frame_number -> list of instance dicts.
+    out_dir: target directory (created if missing).
+    video_base: filename stem used to prefix the output files.
+    video_meta: dict with fps, stride, width, height, video_name — embedded into
+        a small `Frame Info` sheet for downstream joins.
+    size_distribution: optional dict returned by process_video. When present,
+        adds `Stats`, `Histogram Water`, and `Histogram Ice` sheets so the xlsx
+        mirrors the on-screen size-distribution plot exactly (shared global bin
+        edges per class).
+    mode: "full" (default) writes the rich 5-sheet workbook. "basic" writes a slim
+        3-sheet workbook (Instances/Frame Info/Stats) with metric (µm) columns and
+        no histogram sheets; size_distribution is ignored in that case.
+    um_per_px: microns per pixel for basic-mode metric columns; NaN when missing.
+    """
+    if not per_frame_rows:
+        return
+    os.makedirs(out_dir, exist_ok=True)
+    fps = video_meta.get("fps") or 0
+    stride = video_meta.get("stride") or 1
+    water_edges = _global_bin_edges_from_size_distribution(size_distribution, "water")
+    ice_edges = _global_bin_edges_from_size_distribution(size_distribution, "ice")
+    written = 0
+    for frame_number in sorted(per_frame_rows):
+        rows = per_frame_rows[frame_number]
+        if not rows:
+            continue
+        original_video_frame = int(frame_number) * int(stride)
+        frame_time_seconds = round(original_video_frame / fps, 3) if fps > 0 else None
+        out_path = os.path.join(
+            out_dir, f"{video_base}_frame_{int(frame_number):06d}_instances.xlsx"
+        )
+
+        if mode == "basic":
+            _apply_metric(rows, um_per_px)
+            cols = ["instance_id", "class", "confidence", "pixel_count",
+                    "eq_diameter_px", "eq_diameter_um", "area_um2"]
+            instances_df = pd.DataFrame(rows).reindex(columns=cols)
+            water_um = [r["eq_diameter_um"] for r in rows if r["class"] == "water"]
+            ice_um = [r["eq_diameter_um"] for r in rows if r["class"] == "ice"]
+            info_df = pd.DataFrame([{
+                "processed_frame_number": int(frame_number),
+                "original_video_frame": original_video_frame,
+                "frame_time_seconds": frame_time_seconds,
+                "video_name": video_meta.get("video_name"),
+                "video_fps": fps,
+                "video_stride": stride,
+                "frame_width": video_meta.get("width"),
+                "frame_height": video_meta.get("height"),
+                "total_instances": len(rows),
+                "water_count": sum(1 for r in rows if r["class"] == "water"),
+                "ice_count": sum(1 for r in rows if r["class"] == "ice"),
+                "um_per_px": um_per_px if (um_per_px and um_per_px > 0) else None,
+            }])
+            stats_df = pd.DataFrame([
+                _stats_row("water", [v for v in water_um if v == v]),  # v==v drops NaN
+                _stats_row("ice", [v for v in ice_um if v == v]),
+            ])
+            with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
+                instances_df.to_excel(writer, sheet_name="Instances", index=False)
+                info_df.to_excel(writer, sheet_name="Frame Info", index=False)
+                stats_df.to_excel(writer, sheet_name="Stats", index=False)
+            written += 1
+            continue
+
+        # ---- full mode (rich 5-sheet workbook) ----
+        instances_df = pd.DataFrame(rows)
+        water_diameters = [r["eq_diameter_px"] for r in rows if r["class"] == "water"]
+        ice_diameters = [r["eq_diameter_px"] for r in rows if r["class"] == "ice"]
+        water_count = len(water_diameters)
+        ice_count = len(ice_diameters)
+        info_df = pd.DataFrame([{
+            "processed_frame_number": int(frame_number),
+            "original_video_frame": original_video_frame,
+            "frame_time_seconds": frame_time_seconds,
+            "video_name": video_meta.get("video_name"),
+            "video_fps": fps,
+            "video_stride": stride,
+            "frame_width": video_meta.get("width"),
+            "frame_height": video_meta.get("height"),
+            "total_instances": len(rows),
+            "water_count": water_count,
+            "ice_count": ice_count,
+        }])
+        stats_df = pd.DataFrame([
+            _stats_row("water", water_diameters),
+            _stats_row("ice", ice_diameters),
+        ])
+        with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
+            instances_df.to_excel(writer, sheet_name="Instances", index=False)
+            info_df.to_excel(writer, sheet_name="Frame Info", index=False)
+            stats_df.to_excel(writer, sheet_name="Stats", index=False)
+            _histogram_df(water_diameters, water_edges).to_excel(
+                writer, sheet_name="Histogram Water", index=False
+            )
+            _histogram_df(ice_diameters, ice_edges).to_excel(
+                writer, sheet_name="Histogram Ice", index=False
+            )
+        written += 1
+    return written
+
+
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".wmv"}
 
 
@@ -431,7 +887,7 @@ def _list_videos_in_dir(directory):
     return out
 
 
-def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0, output_dir: str = None, progress_callback = None):
+def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0, output_dir: str = None, progress_callback = None, output_mode: str = "full", um_per_px = None):
     """Process the video and return (msg, excel_path, rows, overlap_totals, charts, execution_time, size_distribution)
 
     charts is a dict containing JSON-friendly arrays for plotting:
@@ -504,13 +960,22 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
             out_video_writer = cv2.VideoWriter(output_video_path, cv2.VideoWriter_fourcc(*'mp4v'), 10, (w, h))
 
         rows, overlap_totals = [], {"ww": 0, "ii": 0, "mixed": 0}
+        all_water_areas, all_ice_areas = [], []
         frame_count, processed_frame_count = 0, 0
         size_checkpoints_raw = []  # list of (frame, water_areas, ice_areas)
         last_frame_areas = {"frame": 0, "water": [], "ice": []}
+        per_frame_instance_rows = {}  # processed_frame -> list of per-instance dicts
+        # Raw data for the most recent non-empty frame; used to write the final
+        # frame's per-instance xlsx even when it isn't on a dist_interval boundary.
+        last_frame_raw = {
+            "frame": 0, "full_bin_masks": None, "areas": None, "boxes": None,
+            "class_names": None, "frame_shape": None,
+        }
 
         def process_batch(batch_frames, batch_counts):
             nonlocal rows, overlap_totals, size_checkpoints_raw, last_frame_areas
-            results_list = model(batch_frames, imgsz=640, verbose=False)
+            nonlocal per_frame_instance_rows, last_frame_raw, all_water_areas, all_ice_areas
+            results_list = model(batch_frames, imgsz=640, max_det=2000, verbose=False)
 
             for i, res in enumerate(results_list):
                 original_frame = batch_frames[i]
@@ -523,13 +988,31 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
                 frame_water_areas, frame_ice_areas = [], []
 
                 if res.masks is not None and len(res.boxes):
-                    masks_np = res.masks.data.cpu().numpy()
                     class_names = [res.names[int(b.cls)].lower() for b in res.boxes]
-                    bin_masks = [(m > 0.3).astype(np.uint8) for m in masks_np]
+                    binm = _threshold_masks(res.masks.data, 0.3)     # (N, mh, mw) uint8, on device
+                    mh, mw = int(binm.shape[-2]), int(binm.shape[-1])
 
-                    for fm, box in zip(bin_masks, res.boxes):
-                        full_m = cv2.resize(fm, (w, h), interpolation=cv2.INTER_NEAREST)
-                        area = int(full_m.sum())
+                    # Per-instance full-res pixel areas computed on the masks'
+                    # device straight from the source masks (multiplicity trick):
+                    # exact (== the old int(cv2.resize(...).sum())) but only an
+                    # (N,) vector crosses to the CPU, not the multi-GB full-res
+                    # masks. See test_gpu_mask_equivalence.py.
+                    areas = _mask_areas_from_source(binm, h, w)
+
+                    # Build the full-res CPU masks ONLY when something needs them:
+                    # the overlay (every frame) or full-mode per-instance contour
+                    # metrics (checkpoints + the final-frame stash). In basic mode
+                    # without overlay they are never built, which removes the
+                    # per-frame ~N·h·w GPU→CPU transfer and matching GPU alloc.
+                    need_full_masks = save_ovl or (output_mode != "basic" and dist_interval > 0)
+                    if need_full_masks:
+                        full_np = _gather_resize_nn(binm, h, w).cpu().numpy()
+                        full_masks_for_overlap = [full_np[k] for k in range(full_np.shape[0])]
+                    else:
+                        full_masks_for_overlap = None
+
+                    for idx, box in enumerate(res.boxes):
+                        area = int(areas[idx])
                         cls_name = res.names[int(box.cls)].lower()
                         if cls_name == "water":
                             water_cnt += 1
@@ -543,31 +1026,61 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
                                 frame_ice_areas.append(area)
                         confs.append(box.conf.item())
 
-                    full_masks_for_overlap = [cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST) for m in bin_masks]
-                    for k in range(len(full_masks_for_overlap)):
-                        for j in range(k + 1, len(full_masks_for_overlap)):
-                            inter = full_masks_for_overlap[k] & full_masks_for_overlap[j]
-                            if not np.any(inter):
-                                continue
-                            nk, nj = class_names[k], class_names[j]
-                            if nk == nj == "water":
-                                overlap_totals["ww"] += 1
-                                ww_count += 1
-                            elif nk == nj == "ice":
-                                overlap_totals["ii"] += 1
-                                ii_count += 1
-                            else:
-                                overlap_totals["mixed"] += 1
-                                wi_count += 1
+                    # Pairwise overlap on the masks' device instead of an O(N²)
+                    # Python loop over full-res numpy masks. For nearest
+                    # upsampling (both axes scaled up) overlap at source
+                    # resolution is identical to overlap at full resolution, so
+                    # use the small source masks (cheap, low memory) and fall
+                    # back to full-res only when downscaling. The (ww, ii, mixed)
+                    # tally matches the original loop bit-for-bit — see
+                    # test_gpu_mask_equivalence.py.
+                    overlap_src = binm if (h >= mh and w >= mw) else _gather_resize_nn(binm, h, w)
+                    exists = _overlap_exists_matrix(
+                        overlap_src.reshape(overlap_src.shape[0], -1)
+                    ).cpu().numpy()
+                    ww_count, ii_count, wi_count = _classify_overlaps(exists, class_names)
+                    overlap_totals["ww"] += ww_count
+                    overlap_totals["ii"] += ii_count
+                    overlap_totals["mixed"] += wi_count
 
                     if save_ovl and out_video_writer is not None:
-                        overlay_frame = apply_full_overlay(original_frame, masks_np, class_names)
+                        # Reuse the GPU-resized masks instead of resizing a third
+                        # time; identical output (test_gpu_mask_equivalence.py).
+                        overlay_frame = apply_full_overlay(original_frame, None, class_names,
+                                                           full_masks=full_masks_for_overlap)
                         out_video_writer.write(cv2.cvtColor(overlay_frame, cv2.COLOR_RGB2BGR))
+
+                    # Capture raw segments + per-instance metrics at size-distribution
+                    # checkpoints; also stash the latest raw segments so the final
+                    # frame can be written even when it isn't on a checkpoint. In
+                    # basic mode full_bin_masks is None and the areas alone drive
+                    # the per-instance rows.
+                    if dist_interval > 0:
+                        last_frame_raw = {
+                            "frame": current_processed_frame,
+                            "full_bin_masks": full_masks_for_overlap,
+                            "areas": areas,
+                            "boxes": res.boxes,
+                            "class_names": list(class_names),
+                            "frame_shape": (h, w),
+                        }
+                        if current_processed_frame % dist_interval == 0:
+                            per_frame_instance_rows[current_processed_frame] = _per_instance_metrics(
+                                full_masks_for_overlap, res.boxes, class_names, (h, w),
+                                mode=output_mode, areas=areas,
+                            )
 
                 water_pct = (water_area / total_px * 100) if total_px else 0
                 ice_pct = (ice_area / total_px * 100) if total_px else 0
                 void_pct = max(0, 100 - water_pct - ice_pct)
                 avg_conf = (sum(confs) / len(confs) * 100) if confs else 0
+
+                w_area_um2, w_dia_um = _avg_size_metrics(frame_water_areas, um_per_px)
+                i_area_um2, i_dia_um = _avg_size_metrics(frame_ice_areas, um_per_px)
+                all_area_um2, all_dia_um = _avg_size_metrics(
+                    frame_water_areas + frame_ice_areas, um_per_px
+                )
+                res_pix_um2 = _resolution_pix_per_um2(um_per_px)
 
                 rows.append({
                     "Frame Number": current_processed_frame,
@@ -583,7 +1096,17 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
                     "Avg Confidence (%)": round(avg_conf, 2),
                     "water_pixel_area": water_area,
                     "ice_pixel_area": ice_area,
+                    "Water Avg Area (µm²)": w_area_um2,
+                    "Water Avg Diameter (µm)": w_dia_um,
+                    "Ice Avg Area (µm²)": i_area_um2,
+                    "Ice Avg Diameter (µm)": i_dia_um,
+                    "All Avg Area (µm²)": all_area_um2,
+                    "All Avg Diameter (µm)": all_dia_um,
+                    "Resolution (pix/µm²)": res_pix_um2,
                 })
+
+                all_water_areas.extend(frame_water_areas)
+                all_ice_areas.extend(frame_ice_areas)
 
                 last_frame_areas = {
                     "frame": current_processed_frame,
@@ -654,11 +1177,21 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
             "Ice-Ice": int(overlap_totals.get("ii", 0)),
             "Water-Ice": int(overlap_totals.get("mixed", 0)),
         }])
+        sw_area, sw_dia = _avg_size_metrics(all_water_areas, um_per_px)
+        si_area, si_dia = _avg_size_metrics(all_ice_areas, um_per_px)
+        sa_area, sa_dia = _avg_size_metrics(all_water_areas + all_ice_areas, um_per_px)
         summary_df = pd.DataFrame([{
             "water_count_total": int(charts["donuts"]["water_count"]),
             "ice_count_total": int(charts["donuts"]["ice_count"]),
             "void_pct_avg": float(charts["donuts"]["void_pct_avg"]),
             "avg_conf_mean": float(charts["donuts"]["avg_conf"]),
+            "Water Avg Area (µm²)": sw_area,
+            "Water Avg Diameter (µm)": sw_dia,
+            "Ice Avg Area (µm²)": si_area,
+            "Ice Avg Diameter (µm)": si_dia,
+            "All Avg Area (µm²)": sa_area,
+            "All Avg Diameter (µm)": sa_dia,
+            "Resolution (pix/µm²)": _resolution_pix_per_um2(um_per_px),
         }])
         with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
             df.to_excel(writer, sheet_name="Per-Frame", index=False)
@@ -715,6 +1248,40 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
             except Exception as size_chart_err:
                 print(f"⚠️  Failed to save size distribution PNGs ({size_chart_err}); continuing.")
 
+            # Per-instance xlsx dump at the same checkpoints as size_distribution,
+            # plus the final non-empty processed frame so users always get the
+            # latest snapshot regardless of where it lands relative to dist_interval.
+            if (
+                last_frame_raw["areas"] is not None
+                and last_frame_raw["frame"] not in per_frame_instance_rows
+            ):
+                per_frame_instance_rows[last_frame_raw["frame"]] = _per_instance_metrics(
+                    last_frame_raw["full_bin_masks"],
+                    last_frame_raw["boxes"],
+                    last_frame_raw["class_names"],
+                    last_frame_raw["frame_shape"],
+                    mode=output_mode,
+                    areas=last_frame_raw["areas"],
+                )
+
+            per_frame_xlsx_dir = os.path.join(base_dir, f"{video_fname_base}_per_frame_xlsx")
+            try:
+                video_meta = {
+                    "video_name": video_fname,
+                    "fps": float(video_fps) if video_fps else 0,
+                    "stride": int(stride),
+                    "width": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                    "height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+                }
+                n_written = _save_per_frame_instance_xlsx(
+                    per_frame_instance_rows, per_frame_xlsx_dir, video_fname_base, video_meta,
+                    size_distribution=size_distribution, mode=output_mode, um_per_px=um_per_px,
+                )
+                if n_written:
+                    print(f"📋 Saved {n_written} per-frame instance xlsx file(s) to {per_frame_xlsx_dir}")
+            except Exception as per_frame_err:
+                print(f"⚠️  Failed to save per-frame instance xlsx files ({per_frame_err}); continuing.")
+
         end_time = time.time()
         print(f"✅ Processing complete! Elapsed time: {end_time - start_time:.2f} seconds")
         # execution time in seconds (rounded to 2 decimal places)
@@ -738,6 +1305,39 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
 
 tasks = {}
 
+# Seconds the SSE stream waits on the queue before deciding whether the worker
+# has gone silent. A healthy worker can exceed this during the file-saving tail
+# (chart PNGs + per-frame xlsx), so an idle gap is NOT on its own a failure.
+SSE_IDLE_TIMEOUT = 300
+
+
+def _sse_idle_decision(task):
+    """Decide what an SSE stream should do after an idle (queue-empty) gap.
+
+    ``task`` is ``tasks.get(task_id)`` — the task record, or ``None`` if it was
+    already popped. Returns ``"keep-alive"`` when the worker is still running
+    (record present and not yet completed), meaning the stream should emit a
+    heartbeat comment and keep waiting; returns ``"timeout"`` when the task is
+    gone or finished, meaning the stream should report a real timeout and close.
+    """
+    if task is not None and not task.get("completed"):
+        return "keep-alive"
+    return "timeout"
+
+
+def _mark_task_completed(task_id):
+    """Mark a task completed, tolerating the SSE side having already popped it.
+
+    Returns ``True`` if the record still existed and was updated, ``False`` if
+    it was already removed (e.g. the client disconnected). This keeps the worker
+    thread from raising ``KeyError`` in its ``finally`` after doing all its work.
+    """
+    if task_id in tasks:
+        tasks[task_id]["completed"] = True
+        return True
+    return False
+
+
 # REST API endpoints (synchronous) -------------------------------------------
 @server.route('/api/process', methods=['POST'])
 def api_process():
@@ -753,6 +1353,15 @@ def api_process():
         dist_interval = 0
     if dist_interval < 0:
         dist_interval = 0
+    output_mode = str(data.get('output_mode', 'full')).strip().lower()
+    if output_mode not in ("basic", "full"):
+        output_mode = "full"
+    try:
+        um_per_px = float(data.get('um_per_px'))
+        if um_per_px <= 0:
+            um_per_px = None
+    except (TypeError, ValueError):
+        um_per_px = None
     if not video_path:
         return jsonify({"status": "error", "message": "Missing video_path"}), 400
     if not (os.path.isfile(video_path) or os.path.isdir(video_path)):
@@ -860,6 +1469,8 @@ def api_process():
                             dist_interval=dist_interval,
                             output_dir=out_dir,
                             progress_callback=video_push,
+                            output_mode=output_mode,
+                            um_per_px=um_per_px,
                         )
                     except Exception as per_vid_err:
                         print(f"⚠️  Video {idx}/{total} ({vid_name}) raised: {per_vid_err!r}")
@@ -894,7 +1505,8 @@ def api_process():
             else:
                 # File mode (unchanged behavior).
                 msg, excel_path, rows, overlaps, charts, execution_time, size_distribution = process_video(
-                    video_path, save_ovl, dist_interval=dist_interval, progress_callback=push
+                    video_path, save_ovl, dist_interval=dist_interval, progress_callback=push,
+                    output_mode=output_mode, um_per_px=um_per_px
                 )
                 task_queue.put_nowait({"status": "finished", "data": _single_video_payload(
                     msg, excel_path, rows, overlaps, charts, execution_time, size_distribution
@@ -904,7 +1516,11 @@ def api_process():
             traceback.print_exc()
             task_queue.put_nowait({"status": "error", "message": f"An error occurred: {e}"})
         finally:
-            tasks[task_id]["completed"] = True
+            # The SSE stream may have already popped this task (e.g. the client
+            # disconnected, or an earlier idle-timeout fired). Don't assume the
+            # entry still exists — guard the lookup so a healthy worker can't
+            # crash here after doing all its real work.
+            _mark_task_completed(task_id)
             task_queue.put_nowait({"__done__": True})
             
     t = threading.Thread(target=worker, daemon=True)
@@ -923,8 +1539,18 @@ def api_events(task_id):
     def event_stream():
         while True:
             try:
-                ev = task_queue.get(timeout=300)
+                ev = task_queue.get(timeout=SSE_IDLE_TIMEOUT)
             except Empty:
+                # A healthy worker can go silent for well over 5 minutes during
+                # the tail phases (saving chart PNGs and the per-frame xlsx
+                # files), which push no progress events. Don't mistake that
+                # silence for a dead worker and tear the task down underneath
+                # it: while the task still exists and isn't finished, send an
+                # SSE keep-alive comment (EventSource ignores comment lines) and
+                # keep waiting. Only report a real timeout if the task is gone.
+                if _sse_idle_decision(tasks.get(task_id)) == "keep-alive":
+                    yield ": keep-alive\n\n"
+                    continue
                 yield f"data: {json.dumps({'status': 'error', 'message': 'Timeout: No updates for 5 minutes'})}\n\n"
                 break
             if ev is None:
