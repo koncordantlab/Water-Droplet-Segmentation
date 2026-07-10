@@ -29,12 +29,13 @@ if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 
 # Config set deliberately excludes full/no-um: on the dense golden clip
-# (~1,045 instances/checkpoint frame) each FULL-mode run costs ~1.9 h — the
-# contour + pairwise-overlap work, which is real production behavior — and
-# full/no-um's only delta vs full_um (NaN µm columns) is already pinned by the
-# unit tests and by basic_noum. One slow full config + two fast basic configs.
+# (~1,045 instances/checkpoint frame) each FULL-mode run costs ~10 min warm
+# (first cold run ~2 h) — the contour + pairwise-overlap work, which is real
+# production behavior — and full/no-um's only delta vs full_um (NaN µm
+# columns) is already pinned by the unit tests and by basic_noum. One slow
+# full config + two fast basic configs.
 CONFIGS = [
-    {"name": "full_um", "output_mode": "full", "um_per_px": 2.5, "dist_interval": 5},   # ~1.9 h — 'slow' golden
+    {"name": "full_um", "output_mode": "full", "um_per_px": 2.5, "dist_interval": 5},   # ~10 min warm — 'slow' golden
     {"name": "basic_um", "output_mode": "basic", "um_per_px": 2.5, "dist_interval": 5},
     {"name": "basic_noum", "output_mode": "basic", "um_per_px": None, "dist_interval": 5},
 ]
