@@ -30,7 +30,7 @@ if BACKEND_DIR not in sys.path:
 
 # Config set deliberately excludes full/no-um: on the dense golden clip
 # (~1,045 instances/checkpoint frame) each FULL-mode run costs ~10 min warm
-# (first cold run ~2 h) — the contour + pairwise-overlap work, which is real
+# — the contour + pairwise-overlap work, which is real
 # production behavior — and full/no-um's only delta vs full_um (NaN µm
 # columns) is already pinned by the unit tests and by basic_noum. One slow
 # full config + two fast basic configs.

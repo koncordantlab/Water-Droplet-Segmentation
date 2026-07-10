@@ -5,7 +5,7 @@ markers = [
     "local: needs the lab box (GPU and/or weights); CI runs -m 'not local'",
     "gpu: exercises CUDA",
     "weights: requires the real YOLO weights file",
-    "slow: multi-hour full-mode golden; routine gate runs -m 'local and not slow'",
+    "slow: ~10-min full-mode golden; routine gate runs -m 'local and not slow'",
 ]
 
 [tool.ruff]
