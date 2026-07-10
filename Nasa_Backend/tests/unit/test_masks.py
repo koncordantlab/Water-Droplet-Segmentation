@@ -50,10 +50,10 @@ _SHAPE_CASES = [
     (160, 160, 1080, 1920),
     (160, 160, 720, 1280),
     (104, 152, 513, 761),
-    (200, 200, 100, 100),
-    (50, 80, 50, 80),
-    (37, 41, 123, 256),
-    (160, 160, 2160, 3840),
+    (200, 200, 100, 100),     # downscale
+    (50, 80, 50, 80),         # identity
+    (37, 41, 123, 256),       # odd / coprime
+    (160, 160, 2160, 3840),   # 4K
     (96, 168, 480, 640),
 ]
 
@@ -70,7 +70,9 @@ def test_resize_bin_masks_matches_cv2_exactly(app_module, device):
             got = app_module._resize_bin_masks_nn(
                 torch.from_numpy(prob).to(device), dh, dw, thresh=0.3
             ).cpu().numpy()
-            assert got.shape == expected.shape and got.dtype == np.uint8
+            assert got.shape == expected.shape, \
+                f"shape {got.shape} != {expected.shape} for {(sh, sw, dh, dw)} n={n}"
+            assert got.dtype == np.uint8, f"dtype {got.dtype} != uint8"
             assert np.array_equal(got, expected), (
                 f"src=({sh},{sw}) dst=({dh},{dw}) n={n}: "
                 f"{int((got != expected).sum())} differing pixels"
