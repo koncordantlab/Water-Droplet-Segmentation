@@ -84,8 +84,7 @@ The tracker is custom (not ByteTrack / BoT-SORT). It maintains a `Track` datacla
 - **Backend tests**: pytest, run from inside `Nasa_Backend/` in the project's
   Python env (on the lab box that's the conda `droplets` env:
   `~/miniconda3/envs/droplets/bin/python`). Tiers: `python -m pytest -m "not
-  local"` is tier 1 (CPU-only; the conftest stubs the import-time YOLO load
-  when weights are absent, so it also runs in CI); `python -m pytest -m "local
+  local"` is tier 1 (CPU-only; runs in CI — note the weights are currently tracked in git, so CI runs the real CPU weights load, verified green; the conftest stubs the load only when the weights file is absent or NASA_FORCE_YOLO_STUB=1); `python -m pytest -m "local
   and not slow"` is tier 2 (GPU + weights + the two fast basic-mode golden
   masters, minutes) — **required before opening any PR**; `python -m pytest -m
   "local and slow"` is the full-mode golden (`full_um`, ~10 min warm on the

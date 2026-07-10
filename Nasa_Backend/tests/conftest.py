@@ -1,12 +1,18 @@
 """Shared pytest setup for the Nasa_Backend suite.
 
 The app module (frontend_nasa13_apiV2) loads YOLO weights at import time via a
-relative path. Importing it therefore needs: Nasa_Backend/ on sys.path, cwd =
-Nasa_Backend/ during the import, and the weights file — which does not exist in
-CI. When weights are absent (or NASA_FORCE_YOLO_STUB=1), ultralytics.YOLO is
-replaced with a stub BEFORE the app module is first imported. Tier-1 tests
-never touch the model, so the stub never leaks into behavior; on the lab box
-the real weights load and `pytest -m local` exercises the real model.
+relative path. Importing it therefore needs Nasa_Backend/ on sys.path and cwd =
+Nasa_Backend/ during the import. When the weights file is absent (weights-free
+environments — e.g. CI once the tracked .pt files are removed from git) or
+NASA_FORCE_YOLO_STUB=1, ultralytics.YOLO is replaced with a stub BEFORE the app
+module is first imported. NOTE: the weights are currently TRACKED in git, so
+today's CI checkouts contain them and run the real (CPU) load — verified green;
+the stub path is exercised in CI-parity runs via NASA_FORCE_YOLO_STUB=1.
+Tier-1 tests never touch the model either way.
+
+Access the app module ONLY through the app_module fixture — a top-level
+`import frontend_nasa13_apiV2` in a test file would run at collection time and
+bypass the stub decision made here.
 """
 import os
 import sys

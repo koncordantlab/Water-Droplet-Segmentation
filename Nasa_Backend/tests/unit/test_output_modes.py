@@ -1,6 +1,4 @@
 """Basic/Full per-instance output modes. Migrated from test_output_modes.py."""
-import os
-
 import numpy as np
 import pandas as pd
 

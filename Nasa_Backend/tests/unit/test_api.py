@@ -3,10 +3,8 @@ task/queue/worker/SSE machinery runs for real, only the video pipeline is fake.
 Verifies the final SSE payload carries every field the React app reads."""
 import json
 import time
-from queue import Queue
 
 import numpy as np
-import pytest
 
 
 def _drain_sse(mod, task_id, deadline_s=10.0):
