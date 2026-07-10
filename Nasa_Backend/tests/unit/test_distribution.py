@@ -1,7 +1,6 @@
 """Size-distribution binning invariants: log-spaced global edges, stats blocks,
 long-format histogram frames. New coverage (no prior standalone script)."""
 import numpy as np
-import pytest
 
 
 def test_shared_bin_edges_are_log_spaced(app_module):
@@ -66,3 +65,27 @@ def test_global_bin_edges_lookup(app_module):
     assert app_module._global_bin_edges_from_size_distribution(sd, "ice") == [1.0, 2.0]
     assert app_module._global_bin_edges_from_size_distribution(None, "water") is None
     assert app_module._global_bin_edges_from_size_distribution({"checkpoints": []}, "water") is None
+
+
+def test_stats_and_histogram_rounding_precision(app_module):
+    # Values with >3 decimals distinguish the stats blocks' 2dp rounding from
+    # _histogram_df's 3dp rounding, and pin mean/median/std numerically.
+    vals = [1.23456, 2.34567, 3.45678]
+    arr = np.asarray(vals, dtype=float)
+    block = app_module._droplet_stats_block(vals)
+    for key, ref in (
+        ("min", arr.min()), ("max", arr.max()), ("mean", arr.mean()),
+        ("median", np.median(arr)), ("std", arr.std()),
+    ):
+        assert block["stats"][key] == round(float(ref), 2), key
+    assert block["stats"]["mean"] != round(float(arr.mean()), 3)  # proves 2dp, not 3dp
+
+    edges = [1.11111, 2.22222, 4.44444]
+    df = app_module._histogram_df(vals, edges)
+    assert df["bin_lo"].tolist() == [1.111, 2.222]    # proves 3dp
+    assert df["bin_hi"].tolist() == [2.222, 4.444]
+    assert df["bin_lo"].tolist() != [1.11, 2.22]      # proves not 2dp
+    assert df["bin_center"].tolist() == [
+        float(np.round((1.11111 + 2.22222) / 2.0, 3)),
+        float(np.round((2.22222 + 4.44444) / 2.0, 3)),
+    ]
