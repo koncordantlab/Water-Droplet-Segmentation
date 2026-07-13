@@ -45,3 +45,13 @@ def test_get_model_is_a_singleton(monkeypatch):
     b = model_mod.get_model()
     assert a is b
     monkeypatch.setattr(model_mod, "_instance", None)  # don't leak to other tests
+
+
+def test_default_weights_path_comes_from_config(monkeypatch):
+    """The production path: no explicit weights_path -> config.weights_path()
+    at load time, env override respected."""
+    monkeypatch.setattr(model_mod, "YOLO", _FakeYOLO)
+    monkeypatch.setenv("NASA_WEIGHTS_PATH", "/env/override.pt")
+    m = model_mod.SegmentationModel()
+    m.predict(["f"])
+    assert m._model.path == "/env/override.pt"
