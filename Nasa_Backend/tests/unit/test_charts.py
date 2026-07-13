@@ -40,14 +40,16 @@ def test_save_size_distribution_pngs_writes_per_checkpoint(tmp_path):
               "water": {"count": 3, "histogram": {
                   "bin_edges": [1.0, 2.0, 4.0, 8.0],
                   "counts": [1, 1, 1]},
-                  "min": 1.1, "max": 6.0,
-                  "mean": 3.0, "median": 2.5, "std": 1.9},
+                  "stats": {"min": 1.1, "max": 6.0,
+                           "mean": 3.0, "median": 2.5, "std": 1.9}},
               "ice": {"count": 1, "histogram": {
                   "bin_edges": [2.0, 4.0, 8.0],
                   "counts": [1, 0]},
-                  "min": 2.5, "max": 4.0,
-                  "mean": 3.0, "median": 3.0, "std": 0.7},
+                  "stats": {"min": 2.5, "max": 4.0,
+                           "mean": 3.0, "median": 3.0, "std": 0.7}},
           }]}
     charts._save_size_distribution_pngs(sd, str(tmp_path), "vid")
     pngs = [f for f in os.listdir(tmp_path) if f.endswith(".png")]
     assert pngs, "no size-distribution PNGs written"
+    for f in pngs:
+        assert os.path.getsize(tmp_path / f) > 1024, f"{f} suspiciously small"

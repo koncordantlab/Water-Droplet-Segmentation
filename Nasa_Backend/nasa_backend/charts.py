@@ -1,3 +1,4 @@
+# nasa_backend/charts.py
 """Headless matplotlib PNG writers for the summary charts and the per-checkpoint
 size-distribution histograms."""
 import os
