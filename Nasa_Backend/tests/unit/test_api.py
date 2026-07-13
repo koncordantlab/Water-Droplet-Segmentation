@@ -6,12 +6,15 @@ import time
 
 import numpy as np
 
+from nasa_backend import pipeline
+from nasa_backend.api import routes
 
-def _drain_sse(mod, task_id, deadline_s=10.0):
+
+def _drain_sse(app, task_id, deadline_s=10.0):
     """Collect SSE frames for a task until the closed frame or deadline."""
     frames = []
-    with mod.server.test_request_context(f"/api/events/{task_id}"):
-        gen = mod.api_events(task_id).response
+    with app.test_request_context(f"/api/events/{task_id}"):
+        gen = routes.api_events(task_id).response
         t0 = time.time()
         for frame in gen:
             frames.append(frame)
@@ -29,7 +32,7 @@ def _data_events(frames):
     return out
 
 
-def test_process_full_flow_final_payload(app_module, monkeypatch, tmp_path):
+def test_process_full_flow_final_payload(app, monkeypatch, tmp_path):
     video = tmp_path / "clip.mp4"
     video.write_bytes(b"\x00fake")
     excel = tmp_path / "clip_detection_summary.xlsx"
@@ -53,8 +56,8 @@ def test_process_full_flow_final_payload(app_module, monkeypatch, tmp_path):
                   "donuts": {"water_count": 3, "ice_count": 1, "void_pct_avg": 84.5, "avg_conf": 0.9}}
         return ("✅ Processing complete!", str(excel), rows, overlaps, charts, 1.23, size_dist)
 
-    monkeypatch.setattr(app_module, "process_video", fake_process_video)
-    client = app_module.server.test_client()
+    monkeypatch.setattr(pipeline, "process_video", fake_process_video)
+    client = app.test_client()
     resp = client.post("/api/process", json={
         "video_path": str(video), "save_overlay": False,
         "dist_interval": 5, "output_mode": "basic", "um_per_px": 2.5,
@@ -63,7 +66,7 @@ def test_process_full_flow_final_payload(app_module, monkeypatch, tmp_path):
     body = resp.get_json()
     assert body["status"] == "ok" and body["task_id"]
 
-    events = _data_events(_drain_sse(app_module, body["task_id"]))
+    events = _data_events(_drain_sse(app, body["task_id"]))
 
     # progress event passed through make_json_serializable: NaN -> null
     progress = [e for e in events if e.get("status") == "progress"]
@@ -88,8 +91,8 @@ def test_process_full_flow_final_payload(app_module, monkeypatch, tmp_path):
                         "dist_interval": 5, "output_mode": "basic", "um_per_px": 2.5}
 
 
-def test_process_validation_errors(app_module):
-    client = app_module.server.test_client()
+def test_process_validation_errors(app):
+    client = app.test_client()
     r1 = client.post("/api/process", json={})
     assert r1.status_code == 400
     assert r1.get_json() == {"status": "error", "message": "Missing video_path"}
@@ -98,7 +101,7 @@ def test_process_validation_errors(app_module):
     assert r2.get_json()["message"].startswith("Path is neither a file nor a directory")
 
 
-def test_process_sanitizes_bad_params(app_module, monkeypatch, tmp_path):
+def test_process_sanitizes_bad_params(app, monkeypatch, tmp_path):
     video = tmp_path / "v.mp4"
     video.write_bytes(b"\x00")
     captured = {}
@@ -109,21 +112,21 @@ def test_process_sanitizes_bad_params(app_module, monkeypatch, tmp_path):
                         um_per_px=um_per_px)
         return ("✅ ok", None, None, None, None, 0.1, None)
 
-    monkeypatch.setattr(app_module, "process_video", fake_process_video)
-    client = app_module.server.test_client()
+    monkeypatch.setattr(pipeline, "process_video", fake_process_video)
+    client = app.test_client()
     resp = client.post("/api/process", json={
         "video_path": str(video), "dist_interval": "junk",
         "output_mode": "WEIRD", "um_per_px": -3,
     })
     assert resp.status_code == 202
-    _drain_sse(app_module, resp.get_json()["task_id"])
+    _drain_sse(app, resp.get_json()["task_id"])
     assert captured == {"dist_interval": 0, "output_mode": "full", "um_per_px": None}
 
 
-def test_download_summary(app_module, tmp_path):
+def test_download_summary(app, tmp_path):
     f = tmp_path / "summary.xlsx"
     f.write_bytes(b"PK\x03\x04data")
-    client = app_module.server.test_client()
+    client = app.test_client()
     ok = client.get(f"/api/download_summary?path={f}")
     assert ok.status_code == 200
     assert ok.data == b"PK\x03\x04data"

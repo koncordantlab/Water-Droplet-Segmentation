@@ -72,3 +72,14 @@ def _import_app_module():
 def app_module():
     """The imported app module; YOLO stubbed automatically when weights absent."""
     return _import_app_module()
+
+
+@pytest.fixture()
+def app():
+    from nasa_backend.api import create_app
+    return create_app()
+
+
+@pytest.fixture()
+def client(app):
+    return app.test_client()
