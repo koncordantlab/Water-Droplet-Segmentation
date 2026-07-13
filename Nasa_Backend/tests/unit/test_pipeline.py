@@ -61,7 +61,20 @@ def synthetic_video(tmp_path):
     return path
 
 
-def test_fake_model_end_to_end(synthetic_video, tmp_path, monkeypatch):
+@pytest.fixture
+def synthetic_video_60(tmp_path):
+    """60 frames at 10 fps -> stride 10 -> processed frames 1..6."""
+    path = str(tmp_path / "synth60.mp4")
+    w = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), 10, (64, 64))
+    for i in range(60):
+        frame = np.full((64, 64, 3), i % 255, dtype=np.uint8)
+        w.write(frame)
+    w.release()
+    assert os.path.getsize(path) > 0
+    return path
+
+
+def test_fake_model_end_to_end(synthetic_video, synthetic_video_60, tmp_path, monkeypatch):
     monkeypatch.setattr(model_mod, "get_model", lambda: _FakeModel())
     events = []
     msg, excel_path, rows, overlaps, charts, exec_time, size_dist = pipeline.process_video(
@@ -93,6 +106,23 @@ def test_fake_model_end_to_end(synthetic_video, tmp_path, monkeypatch):
     # progress events carried eta + progress
     processing = [e for e in events if e.get("status") == "processing"]
     assert processing and all("eta" in e and "progress" in e for e in processing)
+
+    # Deferred full-res gather: 60 frames -> processed 1..6, dist_interval=4 ->
+    # checkpoint at frame 4 only (6 % 4 != 0), so the final processed frame (6)
+    # is written via the last_frame_raw stash of the small SOURCE masks
+    # ("binm"), materialized lazily at the final-frame write rather than
+    # gathered eagerly during process_batch like the checkpoint frame was.
+    *_, size_dist_60 = pipeline.process_video(
+        synthetic_video_60, save_ovl=False, dist_interval=4,
+        output_dir=str(tmp_path / "out60"), output_mode="full", um_per_px=2.0,
+    )
+    per_frame_dir_60 = os.path.join(str(tmp_path / "out60"), "synth60_per_frame_xlsx")
+    written_60 = sorted(os.listdir(per_frame_dir_60))
+    assert [f for f in written_60 if f.endswith(".xlsx")] == [
+        "synth60_frame_000004_instances.xlsx",
+        "synth60_frame_000006_instances.xlsx",
+    ]
+    assert [c["frame"] for c in size_dist_60["checkpoints"]] == [4, 6]
 
 
 def test_dist_interval_zero_yields_no_size_distribution(synthetic_video, tmp_path, monkeypatch):

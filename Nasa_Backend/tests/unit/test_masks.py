@@ -171,6 +171,20 @@ def test_overlap_exists_matrix_matches_np_any(device):
                 assert bool(E[k, j]) == expect, f"E[{k},{j}] wrong (trial {trial})"
 
 
+@pytest.mark.parametrize("chunk", [1, 2, 3, 1024])
+def test_overlap_exists_matrix_chunking_is_invariant(chunk, monkeypatch):
+    # _overlap_exists_matrix processes _OVERLAP_ROW_CHUNK rows of the matmul at
+    # a time (module attribute, read at call time so it's monkeypatchable here).
+    # Chunk size must never change the result -- same dtype/op order per block.
+    rng = np.random.default_rng(7)
+    m = torch.from_numpy((rng.random((7, 40)) > 0.6).astype(np.uint8))
+    monkeypatch.setattr(masks, "_OVERLAP_ROW_CHUNK", chunk)
+    out = masks._overlap_exists_matrix(m).cpu().numpy()
+    monkeypatch.setattr(masks, "_OVERLAP_ROW_CHUNK", 10_000)
+    ref = masks._overlap_exists_matrix(m).cpu().numpy()
+    assert (out == ref).all()
+
+
 def test_overlap_source_res_equals_full_res_when_upscaling(device):
     # The integration computes overlap from the SOURCE-resolution masks when both
     # axes are upscaled; that must give the same overlap-exists (and the same

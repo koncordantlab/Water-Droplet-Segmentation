@@ -85,6 +85,9 @@ def _mask_areas_from_source(binm, dst_h, dst_w):
     return areas.cpu().numpy()
 
 
+_OVERLAP_ROW_CHUNK = 1024  # rows per block; bounds the float32 workspace
+
+
 def _overlap_exists_matrix(masks_2d):
     """(N, N) bool: whether masks k and j share at least one set pixel.
 
@@ -94,12 +97,25 @@ def _overlap_exists_matrix(masks_2d):
     0.0 and a pair that shares any pixel sums to ≥ 1.0 — the ``> 0`` test is
     therefore exact regardless of accumulation order or TF32, and reproduces
     ``np.any(mask_k & mask_j)`` bit-for-bit (tests/unit/test_masks.py).
+
+    The matmul is computed ``_OVERLAP_ROW_CHUNK`` rows at a time (read as a
+    module attribute at call time so it can be monkeypatched) instead of as one
+    (N, N) product: same dtype and op order per block, just fewer rows per
+    call, so the result is bit-identical for any chunk size (see
+    tests/unit/test_masks.py::test_overlap_exists_matrix_chunking_is_invariant)
+    while bounding the transient float32 workspace to a (chunk, N) footprint —
+    the returned matrix is bool either way.
     """
     n = int(masks_2d.shape[0])
     if n == 0:
         return torch.zeros((0, 0), dtype=torch.bool, device=masks_2d.device)
     m = masks_2d.to(torch.float32)
-    return (m @ m.t()) > 0
+    mt = m.t()
+    exists = torch.empty((n, n), dtype=torch.bool, device=masks_2d.device)
+    chunk = _OVERLAP_ROW_CHUNK
+    for i0 in range(0, n, chunk):
+        exists[i0:i0 + chunk] = (m[i0:i0 + chunk] @ mt) > 0
+    return exists
 
 
 def _classify_overlaps(exists_matrix, class_names):

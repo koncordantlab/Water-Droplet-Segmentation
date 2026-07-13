@@ -205,9 +205,16 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
                     # metrics (checkpoints + the final-frame stash). In basic mode
                     # without overlay they are never built, which removes the
                     # per-frame ~N·h·w GPU→CPU transfer and matching GPU alloc.
-                    need_full_masks = save_ovl or (output_mode != "basic" and dist_interval > 0)
+                    # Non-checkpoint, non-overlay frames skip the gather entirely —
+                    # the small source masks are stashed in last_frame_raw instead
+                    # and materialized lazily only if that frame turns out to be
+                    # the final one written (see the final-frame block below).
+                    is_checkpoint = dist_interval > 0 and current_processed_frame % dist_interval == 0
+                    need_full_masks = save_ovl or (output_mode != "basic" and dist_interval > 0 and is_checkpoint)
+                    full_t = None
                     if need_full_masks:
-                        full_np = _gather_resize_nn(binm, h, w).cpu().numpy()
+                        full_t = _gather_resize_nn(binm, h, w)
+                        full_np = full_t.cpu().numpy()
                         full_masks_for_overlap = [full_np[k] for k in range(full_np.shape[0])]
                     else:
                         full_masks_for_overlap = None
@@ -235,7 +242,8 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
                     # back to full-res only when downscaling. The (ww, ii, mixed)
                     # tally matches the original loop bit-for-bit — see
                     # tests/unit/test_masks.py.
-                    overlap_src = binm if (h >= mh and w >= mw) else _gather_resize_nn(binm, h, w)
+                    overlap_src = binm if (h >= mh and w >= mw) else (
+                        full_t if full_t is not None else _gather_resize_nn(binm, h, w))
                     exists = _overlap_exists_matrix(
                         overlap_src.reshape(overlap_src.shape[0], -1)
                     ).cpu().numpy()
@@ -260,6 +268,7 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
                         last_frame_raw = {
                             "frame": current_processed_frame,
                             "full_bin_masks": full_masks_for_overlap,
+                            "binm": binm,
                             "areas": areas,
                             "boxes": res.boxes,
                             "class_names": list(class_names),
@@ -456,6 +465,11 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
                 last_frame_raw["areas"] is not None
                 and last_frame_raw["frame"] not in per_frame_instance_rows
             ):
+                if (output_mode != "basic" and last_frame_raw.get("full_bin_masks") is None
+                        and last_frame_raw.get("binm") is not None):
+                    _h, _w = last_frame_raw["frame_shape"]
+                    _full = _gather_resize_nn(last_frame_raw["binm"], _h, _w).cpu().numpy()
+                    last_frame_raw["full_bin_masks"] = [_full[k] for k in range(_full.shape[0])]
                 per_frame_instance_rows[last_frame_raw["frame"]] = _per_instance_metrics(
                     last_frame_raw["full_bin_masks"],
                     last_frame_raw["boxes"],
