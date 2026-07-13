@@ -190,6 +190,7 @@ def test_batch_mode_skips_escapes_and_freezes_entries(app, monkeypatch, tmp_path
     allowed = tmp_path / "allowed"; allowed.mkdir()
     outside = tmp_path / "outside"; outside.mkdir()
     (allowed / "in.mp4").write_bytes(b"\x00")
+    (allowed / "alias.mp4").symlink_to(allowed / "in.mp4")
     (outside / "secret.mp4").write_bytes(b"\x00")
     (allowed / "escape.mp4").symlink_to(outside / "secret.mp4")
     monkeypatch.setenv("NASA_VIDEO_ROOTS", str(allowed))
@@ -203,8 +204,9 @@ def test_batch_mode_skips_escapes_and_freezes_entries(app, monkeypatch, tmp_path
     r = app.test_client().post("/api/process", json={"video_path": str(allowed)})
     assert r.status_code == 202
     for _ in range(50):
-        if processed:
+        if len(processed) == 2:
             break
         time.sleep(0.1)
     time.sleep(0.3)  # let the batch loop finish
-    assert processed == [os.path.realpath(str(allowed / "in.mp4"))]
+    expected = os.path.realpath(str(allowed / "in.mp4"))
+    assert processed == [expected, expected]
