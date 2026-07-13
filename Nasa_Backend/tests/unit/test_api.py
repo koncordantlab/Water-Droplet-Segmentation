@@ -2,6 +2,7 @@
 task/queue/worker/SSE machinery runs for real, only the video pipeline is fake.
 Verifies the final SSE payload carries every field the React app reads."""
 import json
+import os
 import time
 
 import numpy as np
@@ -158,3 +159,54 @@ def test_process_accepts_paths_inside_allowed_roots(app, monkeypatch, tmp_path):
                         lambda *a, **k: ("✅ ok", None, None, None, None, 0.1, None))
     r = app.test_client().post("/api/process", json={"video_path": str(vid)})
     assert r.status_code == 202
+
+
+def test_process_freezes_symlink_resolution_at_check_time(app, monkeypatch, tmp_path):
+    from nasa_backend import pipeline
+    real_dir = tmp_path / "real"; real_dir.mkdir()
+    vid = real_dir / "v.mp4"; vid.write_bytes(b"\x00")
+    link_dir = tmp_path / "link"
+    link_dir.symlink_to(real_dir, target_is_directory=True)
+    monkeypatch.setenv("NASA_VIDEO_ROOTS", str(tmp_path))
+    captured = {}
+
+    def fake_process_video(video_path, *a, **k):
+        captured["path"] = video_path
+        return ("✅ ok", None, None, None, None, 0.1, None)
+
+    monkeypatch.setattr(pipeline, "process_video", fake_process_video)
+    r = app.test_client().post("/api/process", json={"video_path": str(link_dir / "v.mp4")})
+    assert r.status_code == 202
+    import time
+    for _ in range(50):
+        if "path" in captured:
+            break
+        time.sleep(0.1)
+    assert captured["path"] == os.path.realpath(str(link_dir / "v.mp4"))
+    assert "/link/" not in captured["path"]
+
+
+def test_batch_mode_skips_symlink_escapes(app, monkeypatch, tmp_path):
+    from nasa_backend import pipeline
+    allowed = tmp_path / "allowed"; allowed.mkdir()
+    outside = tmp_path / "outside"; outside.mkdir()
+    (allowed / "in.mp4").write_bytes(b"\x00")
+    (outside / "secret.mp4").write_bytes(b"\x00")
+    (allowed / "escape.mp4").symlink_to(outside / "secret.mp4")
+    monkeypatch.setenv("NASA_VIDEO_ROOTS", str(allowed))
+    processed = []
+
+    def fake_process_video(video_path, *a, **k):
+        processed.append(os.path.basename(video_path))
+        return ("✅ ok", None, None, None, None, 0.1, None)
+
+    monkeypatch.setattr(pipeline, "process_video", fake_process_video)
+    r = app.test_client().post("/api/process", json={"video_path": str(allowed)})
+    assert r.status_code == 202
+    import time
+    for _ in range(50):
+        if processed:
+            break
+        time.sleep(0.1)
+    time.sleep(0.3)  # let the batch loop finish
+    assert processed == ["in.mp4"]
