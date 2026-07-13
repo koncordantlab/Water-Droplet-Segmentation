@@ -177,7 +177,6 @@ def test_process_freezes_symlink_resolution_at_check_time(app, monkeypatch, tmp_
     monkeypatch.setattr(pipeline, "process_video", fake_process_video)
     r = app.test_client().post("/api/process", json={"video_path": str(link_dir / "v.mp4")})
     assert r.status_code == 202
-    import time
     for _ in range(50):
         if "path" in captured:
             break
@@ -186,7 +185,7 @@ def test_process_freezes_symlink_resolution_at_check_time(app, monkeypatch, tmp_
     assert "/link/" not in captured["path"]
 
 
-def test_batch_mode_skips_symlink_escapes(app, monkeypatch, tmp_path):
+def test_batch_mode_skips_escapes_and_freezes_entries(app, monkeypatch, tmp_path):
     from nasa_backend import pipeline
     allowed = tmp_path / "allowed"; allowed.mkdir()
     outside = tmp_path / "outside"; outside.mkdir()
@@ -197,16 +196,15 @@ def test_batch_mode_skips_symlink_escapes(app, monkeypatch, tmp_path):
     processed = []
 
     def fake_process_video(video_path, *a, **k):
-        processed.append(os.path.basename(video_path))
+        processed.append(video_path)
         return ("✅ ok", None, None, None, None, 0.1, None)
 
     monkeypatch.setattr(pipeline, "process_video", fake_process_video)
     r = app.test_client().post("/api/process", json={"video_path": str(allowed)})
     assert r.status_code == 202
-    import time
     for _ in range(50):
         if processed:
             break
         time.sleep(0.1)
     time.sleep(0.3)  # let the batch loop finish
-    assert processed == ["in.mp4"]
+    assert processed == [os.path.realpath(str(allowed / "in.mp4"))]

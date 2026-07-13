@@ -66,14 +66,13 @@ def api_process():
         return jsonify({"status": "error", "message": "Missing video_path"}), 400
     if not (os.path.isfile(video_path) or os.path.isdir(video_path)):
         return jsonify({"status": "error", "message": f"Path is neither a file nor a directory: {video_path}"}), 400
+    # Resolve ONCE, before the gate, so the checked path and the used path are
+    # the same resolution (no check/use divergence window); the worker closure
+    # then captures this frozen canonical path (TOCTOU).
+    video_path = os.path.realpath(video_path)
     if not _path_allowed(video_path):
         return jsonify({"status": "error",
                         "message": "Path is outside the allowed video directories (see NASA_VIDEO_ROOTS)"}), 403
-
-    # Freeze the resolution the check just approved: the worker runs later on
-    # another thread, and a symlink repointed after the 202 must not smuggle an
-    # outside path into process_video (TOCTOU).
-    video_path = os.path.realpath(video_path)
 
     task_id = uuid.uuid4().hex
     task_queue = Queue()
@@ -114,11 +113,12 @@ def api_process():
 
             if os.path.isdir(video_path):
                 # Batch mode: process every video in the directory, sequentially.
-                videos = _list_videos_in_dir(video_path)
-                disallowed = [v for v in videos if not _path_allowed(v)]
+                resolved = [os.path.realpath(v) for v in _list_videos_in_dir(video_path)]
+                videos, disallowed = [], []
+                for v in resolved:
+                    (videos if _path_allowed(v) else disallowed).append(v)
                 if disallowed:
-                    print(f"⚠️  Skipping {len(disallowed)} entr(y/ies) resolving outside NASA_VIDEO_ROOTS: {disallowed}")
-                    videos = [v for v in videos if _path_allowed(v)]
+                    print(f"⚠️  Skipping {len(disallowed)} entries resolving outside NASA_VIDEO_ROOTS: {disallowed}")
                 print(f"📂 Batch mode: found {len(videos)} video(s) in {video_path}")
                 for _v in videos:
                     print(f"   - {_v}")
