@@ -1,7 +1,8 @@
 # nasa_backend/__main__.py
 """python -m nasa_backend — serve the API (and, once built, the React UI).
-Replaces `python3 frontend_nasa13_apiV2.py`. debug/reloader intentionally off
-(CodeQL: Werkzeug debugger must never face a network)."""
+Replaces the old `python3` entry point into the now-deleted Dash monolith.
+debug/reloader intentionally off (CodeQL: Werkzeug debugger must never face
+a network)."""
 import os
 
 from nasa_backend.api import create_app
