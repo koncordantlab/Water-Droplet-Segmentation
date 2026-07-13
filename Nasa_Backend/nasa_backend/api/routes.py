@@ -19,6 +19,25 @@ from nasa_backend.serialization import make_json_serializable
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
 
+def _video_roots():
+    """Allowed video roots from NASA_VIDEO_ROOTS (colon-separated); defaults to
+    the invoking user's home directory, preserving the paste-a-path workflow
+    while bounding it (CodeQL uncontrolled-path fix)."""
+    raw = os.environ.get("NASA_VIDEO_ROOTS") or os.path.expanduser("~")
+    return [os.path.realpath(r) for r in raw.split(":") if r.strip()]
+
+
+def _path_allowed(p):
+    rp = os.path.realpath(p)
+    for root in _video_roots():
+        try:
+            if os.path.commonpath([rp, root]) == root:
+                return True
+        except ValueError:  # e.g. different drives; treat as not allowed
+            continue
+    return False
+
+
 # REST API endpoints (synchronous) -------------------------------------------
 @api_bp.route('/process', methods=['POST'])
 def api_process():
@@ -47,6 +66,9 @@ def api_process():
         return jsonify({"status": "error", "message": "Missing video_path"}), 400
     if not (os.path.isfile(video_path) or os.path.isdir(video_path)):
         return jsonify({"status": "error", "message": f"Path is neither a file nor a directory: {video_path}"}), 400
+    if not _path_allowed(video_path):
+        return jsonify({"status": "error",
+                        "message": "Path is outside the allowed video directories (see NASA_VIDEO_ROOTS)"}), 403
 
     task_id = uuid.uuid4().hex
     task_queue = Queue()

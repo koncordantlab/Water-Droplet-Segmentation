@@ -22,3 +22,11 @@ def app():
 @pytest.fixture()
 def client(app):
     return app.test_client()
+
+
+@pytest.fixture(autouse=True)
+def _allow_tmp_videos(monkeypatch, tmp_path_factory):
+    """Point the video-path allowlist at pytest's tmp root so route tests can
+    submit tmp_path files; individual tests override NASA_VIDEO_ROOTS to test
+    the enforcement itself."""
+    monkeypatch.setenv("NASA_VIDEO_ROOTS", str(tmp_path_factory.getbasetemp()))

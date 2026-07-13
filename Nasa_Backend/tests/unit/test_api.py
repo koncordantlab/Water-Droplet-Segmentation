@@ -138,3 +138,23 @@ def test_download_summary_serves_only_registered_ids(app, tmp_path):
     assert client.get("/api/download_summary?id=deadbeef").status_code == 400
     assert client.get(f"/api/download_summary?path={f}").status_code == 400  # old contract rejected
     assert client.get("/api/download_summary").status_code == 400
+
+
+def test_process_rejects_paths_outside_allowed_roots(app, monkeypatch, tmp_path):
+    allowed = tmp_path / "allowed"; allowed.mkdir()
+    outside = tmp_path / "outside"; outside.mkdir()
+    vid = outside / "v.mp4"; vid.write_bytes(b"\x00")
+    monkeypatch.setenv("NASA_VIDEO_ROOTS", str(allowed))
+    r = app.test_client().post("/api/process", json={"video_path": str(vid)})
+    assert r.status_code == 403
+    assert "allowed video directories" in r.get_json()["message"]
+
+
+def test_process_accepts_paths_inside_allowed_roots(app, monkeypatch, tmp_path):
+    from nasa_backend import pipeline
+    vid = tmp_path / "v.mp4"; vid.write_bytes(b"\x00")
+    monkeypatch.setenv("NASA_VIDEO_ROOTS", f"/nonexistent-root:{tmp_path}")
+    monkeypatch.setattr(pipeline, "process_video",
+                        lambda *a, **k: ("✅ ok", None, None, None, None, 0.1, None))
+    r = app.test_client().post("/api/process", json={"video_path": str(vid)})
+    assert r.status_code == 202
