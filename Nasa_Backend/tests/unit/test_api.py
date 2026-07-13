@@ -81,9 +81,13 @@ def test_process_full_flow_final_payload(app, monkeypatch, tmp_path):
     assert data["charts"]["donuts"]["water_count"] == 3
     assert data["size_distribution"] == size_dist
     assert data["execution_time"] == 1.23
-    import urllib.parse
-    assert data["download_url"].endswith(
-        "/api/download_summary?path=" + urllib.parse.quote(str(excel)))
+    from nasa_backend.api import tasks as tasks_mod
+    assert "/api/download_summary?id=" in data["download_url"]
+    did = data["download_url"].rsplit("id=", 1)[1]
+    assert tasks_mod.downloads[did] == str(excel)
+    # the served id round-trips to the file
+    dl = app.test_client().get(f"/api/download_summary?id={did}")
+    assert dl.status_code == 200 and dl.data == b"PK\x03\x04fake"
     assert events[-1] == {"status": "closed"}
 
     # api_process parameter parsing reached process_video intact
@@ -123,14 +127,14 @@ def test_process_sanitizes_bad_params(app, monkeypatch, tmp_path):
     assert captured == {"dist_interval": 0, "output_mode": "full", "um_per_px": None}
 
 
-def test_download_summary(app, tmp_path):
+def test_download_summary_serves_only_registered_ids(app, tmp_path):
+    from nasa_backend.api import tasks as tasks_mod
     f = tmp_path / "summary.xlsx"
     f.write_bytes(b"PK\x03\x04data")
     client = app.test_client()
-    ok = client.get(f"/api/download_summary?path={f}")
-    assert ok.status_code == 200
-    assert ok.data == b"PK\x03\x04data"
-    bad = client.get("/api/download_summary?path=/nonexistent.xlsx")
-    assert bad.status_code == 400
-    missing = client.get("/api/download_summary")
-    assert missing.status_code == 400
+    did = tasks_mod.register_download(str(f))
+    ok = client.get(f"/api/download_summary?id={did}")
+    assert ok.status_code == 200 and ok.data == b"PK\x03\x04data"
+    assert client.get("/api/download_summary?id=deadbeef").status_code == 400
+    assert client.get(f"/api/download_summary?path={f}").status_code == 400  # old contract rejected
+    assert client.get("/api/download_summary").status_code == 400

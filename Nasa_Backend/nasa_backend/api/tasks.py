@@ -1,11 +1,22 @@
 # nasa_backend/api/tasks.py
 """In-memory task registry shared by the worker threads and the SSE stream.
 State is lost on restart; there is no persistence layer (spec non-goal)."""
+import uuid
 
 tasks = {}
 
+# download_id -> absolute xlsx path; entries live for the process lifetime,
+# matching the in-memory tasks dict (no persistence by design).
+downloads = {}
+
 # Seconds the SSE stream waits for an event before deciding keep-alive/timeout.
 SSE_IDLE_TIMEOUT = 300
+
+
+def register_download(path):
+    did = uuid.uuid4().hex
+    downloads[did] = str(path)
+    return did
 
 
 def _sse_idle_decision(task):

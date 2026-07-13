@@ -6,7 +6,6 @@ import json
 import os
 import threading
 import traceback
-import urllib.parse
 import uuid
 from queue import Empty, Queue
 
@@ -60,7 +59,7 @@ def api_process():
     def _build_download_url(excel_path):
         if not excel_path:
             return None
-        return f"{host_url}/api/download_summary?path={urllib.parse.quote(str(excel_path))}"
+        return f"{host_url}/api/download_summary?id={tasks_mod.register_download(excel_path)}"
 
     def worker():
         try:
@@ -260,7 +259,8 @@ def api_status():
 
 @api_bp.route('/download_summary')
 def api_download_summary():
-    path = request.args.get('path')
+    did = request.args.get('id')
+    path = tasks_mod.downloads.get(did) if did else None
     if not path or not os.path.isfile(path):
-        return jsonify({"status": "error", "message": "Invalid or missing path"}), 400
+        return jsonify({"status": "error", "message": "Invalid or missing download id"}), 400
     return send_file(path, as_attachment=True)
