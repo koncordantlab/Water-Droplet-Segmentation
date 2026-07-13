@@ -56,7 +56,7 @@ def _resize_bin_masks_nn(prob, dst_h, dst_w, thresh=0.3):
     ``prob`` is a torch tensor of shape (N, src_h, src_w) on any device. Returns
     a uint8 (N, dst_h, dst_w) tensor on the *same* device, bit-identical to
     ``stack(cv2.resize((prob[k] > thresh).astype(uint8), (dst_w, dst_h),
-    INTER_NEAREST) for k)``. See test_gpu_mask_equivalence.py.
+    INTER_NEAREST) for k)``. See tests/unit/test_masks.py.
     """
     return _gather_resize_nn(_threshold_masks(prob, thresh), dst_h, dst_w)
 
@@ -73,7 +73,7 @@ def _mask_areas_from_source(binm, dst_h, dst_w):
     col (the bincount of cv2's nearest index map). Pure integer arithmetic on the
     masks' device, so it is exact (no float rounding) and only an (N,) vector
     crosses to the CPU — not the multi-GB full-res masks. See
-    test_gpu_mask_equivalence.py.
+    tests/unit/test_masks.py.
     """
     src_h, src_w = int(binm.shape[-2]), int(binm.shape[-1])
     cy = np.bincount(_nn_resize_index_map(src_h, dst_h), minlength=src_h).astype(np.int32)
@@ -93,7 +93,7 @@ def _overlap_exists_matrix(masks_2d):
     accumulation is non-negative, so a pair that shares no pixel sums to exactly
     0.0 and a pair that shares any pixel sums to ≥ 1.0 — the ``> 0`` test is
     therefore exact regardless of accumulation order or TF32, and reproduces
-    ``np.any(mask_k & mask_j)`` bit-for-bit (test_gpu_mask_equivalence.py).
+    ``np.any(mask_k & mask_j)`` bit-for-bit (tests/unit/test_masks.py).
     """
     n = int(masks_2d.shape[0])
     if n == 0:

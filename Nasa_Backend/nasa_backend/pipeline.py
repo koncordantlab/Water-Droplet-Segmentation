@@ -70,13 +70,6 @@ def apply_full_overlay(img, masks_np, class_names, mask_thresh=0.3, full_masks=N
     return np.clip(base, 0, 255).astype(np.uint8)
 
 
-# Cache of cv2 INTER_NEAREST source-index maps, keyed by (src_len, dst_len). The
-# map is tiny (length dst) and identical for every mask that shares a resize, so
-# it is derived once per shape pair and reused.
-_NN_INDEX_MAP_CACHE = {}
-
-
-
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".wmv"}
 
 
