@@ -1,0 +1,17 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "local: needs the lab box (GPU and/or weights); CI runs -m 'not local'",
+    "gpu: exercises CUDA",
+    "weights: requires the real YOLO weights file",
+    "slow: ~10-min full-mode golden; routine gate runs -m 'local and not slow'",
+]
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+# Fatal-only for the monolith era: syntax errors, invalid prints/comparisons,
+# undefined names. Tightened in phase-0 PR ② once the package split lands.
+select = ["E9", "F63", "F7", "F82"]

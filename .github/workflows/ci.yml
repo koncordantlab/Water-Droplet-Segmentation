@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Nasa_Backend
+    env:
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: Nasa_Backend/requirements.txt
+      - name: System libs for OpenCV
+        run: sudo apt-get update && sudo apt-get install -y libgl1
+      - name: Install CPU torch first (keeps the multi-GB CUDA wheel out of CI)
+        run: pip install torch==2.9.0 torchvision==0.24.0 --index-url https://download.pytorch.org/whl/cpu
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest ruff
+      - name: Lint
+        run: ruff check .
+      - name: Tier-1 tests (no weights, no GPU)
+        run: pytest -m "not local"
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nasa-frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: nasa-frontend/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Build
+        # CI=true (Actions default) makes CRA treat warnings as errors; the
+        # legacy codebase has warnings, and fixing them is out of phase-0-PR① scope.
+        run: CI=false npm run build
