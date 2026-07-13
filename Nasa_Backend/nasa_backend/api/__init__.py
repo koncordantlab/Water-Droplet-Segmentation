@@ -27,9 +27,11 @@ def create_app():
     # ahead of the webui catch-all below, 404ing before it ever reaches the
     # built React bundle's own static/ assets.
     app = Flask(__name__, static_folder=None)
-    # CORS for /api/* only, verbatim from the monolith; narrowed in the
-    # CodeQL task later in this PR.
-    CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
+    # Dev-server origins only; in production the React bundle is same-origin
+    # and never triggers CORS. Comma-separated env override.
+    origins = [o.strip() for o in
+               os.environ.get("NASA_CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
+    CORS(app, resources={r"/api/*": {"origins": origins}}, supports_credentials=True)
     from nasa_backend.api.routes import api_bp
     app.register_blueprint(api_bp)
 

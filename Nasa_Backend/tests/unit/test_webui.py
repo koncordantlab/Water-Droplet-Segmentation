@@ -38,3 +38,12 @@ def test_missing_bundle_degrades_gracefully(monkeypatch, tmp_path):
     assert r.status_code == 200
     assert b"UI not built" in r.data
     assert client.get("/api/status").status_code == 200
+
+
+def test_cors_allows_configured_origin_only(monkeypatch):
+    monkeypatch.setenv("NASA_CORS_ORIGINS", "http://localhost:3000")
+    client = _fresh_app().test_client()
+    ok = client.get("/api/status", headers={"Origin": "http://localhost:3000"})
+    assert ok.headers.get("Access-Control-Allow-Origin") == "http://localhost:3000"
+    bad = client.get("/api/status", headers={"Origin": "https://evil.example"})
+    assert bad.headers.get("Access-Control-Allow-Origin") is None
