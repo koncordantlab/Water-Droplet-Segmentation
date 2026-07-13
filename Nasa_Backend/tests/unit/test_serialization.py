@@ -38,3 +38,11 @@ def test_numpy_and_pandas_coercions():
     assert ser(pd.NaT) is None
     assert ser({"k": (np.int32(1), None)}) == {"k": [1, None]}
     assert ser((1, "a")) == [1, "a"]
+
+
+def test_ndarray_elements_get_nan_scrubbed():
+    import numpy as np
+    out = serialization.make_json_serializable(np.array([1.0, float("nan"), 3.0]))
+    assert out == [1.0, None, 3.0]
+    nested = serialization.make_json_serializable({"a": np.array([[1.0, float("inf")]])})
+    assert nested == {"a": [[1.0, None]]}

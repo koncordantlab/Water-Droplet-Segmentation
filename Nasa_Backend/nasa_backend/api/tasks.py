@@ -12,6 +12,11 @@ downloads = {}
 # Seconds the SSE stream waits for an event before deciding keep-alive/timeout.
 SSE_IDLE_TIMEOUT = 300
 
+# A worker that produces no events for SSE_IDLE_TIMEOUT * SSE_MAX_KEEPALIVES
+# seconds (default 1 h) is declared hung: the stream errors out and the task
+# entry is reclaimed instead of leaking keep-alives forever.
+SSE_MAX_KEEPALIVES = 12
+
 
 def register_download(path):
     did = uuid.uuid4().hex

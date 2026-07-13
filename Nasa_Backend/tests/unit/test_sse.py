@@ -80,3 +80,21 @@ def test_events_unknown_task_is_404(app):
     resp = client.get("/api/events/does-not-exist")
     assert resp.status_code == 404
     assert resp.get_json() == {"status": "error", "message": "Invalid task_id"}
+
+
+def test_event_stream_gives_up_after_max_keepalives(app, monkeypatch):
+    from nasa_backend.api import routes, tasks as tasks_mod
+    from queue import Queue
+    monkeypatch.setattr(tasks_mod, "SSE_IDLE_TIMEOUT", 0.02)
+    monkeypatch.setattr(tasks_mod, "SSE_MAX_KEEPALIVES", 3)
+    tid = "test-hung-worker"
+    tasks_mod.tasks[tid] = {"queue": Queue(), "completed": False, "status": "queued"}
+    try:
+        with app.test_request_context(f"/api/events/{tid}"):
+            frames = list(routes.api_events(tid).response)
+    finally:
+        tasks_mod.tasks.pop(tid, None)
+    keepalives = [f for f in frames if f == ": keep-alive\n\n"]
+    assert len(keepalives) == 3, "must stop keep-alive after the cap"
+    assert "unresponsive" in frames[-1]
+    assert tid not in tasks_mod.tasks, "hung task entry must be reclaimed"

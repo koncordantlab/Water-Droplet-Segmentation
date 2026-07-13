@@ -26,9 +26,11 @@ def make_json_serializable(obj):
         return f if math.isfinite(f) else None
     if isinstance(obj, (np.bool_,)):
         return bool(obj)
-    # numpy arrays
+    # numpy arrays — route contents back through this function so NaN/inf
+    # elements get scrubbed to null the same way scalars do (a bare ndarray
+    # NaN would otherwise survive tolist() and break the SSE JSON.parse).
     if isinstance(obj, (np.ndarray,)):
-        return obj.tolist()
+        return make_json_serializable(obj.tolist())
     # pandas NA
     try:
         if pd.isna(obj):

@@ -250,6 +250,7 @@ def api_events(task_id):
     task_queue = task["queue"]
 
     def event_stream():
+        idle_rounds = 0
         while True:
             try:
                 ev = task_queue.get(timeout=tasks_mod.SSE_IDLE_TIMEOUT)
@@ -260,12 +261,22 @@ def api_events(task_id):
                 # silence for a dead worker and tear the task down underneath
                 # it: while the task still exists and isn't finished, send an
                 # SSE keep-alive comment (EventSource ignores comment lines) and
-                # keep waiting. Only report a real timeout if the task is gone.
-                if tasks_mod._sse_idle_decision(tasks_mod.tasks.get(task_id)) == "keep-alive":
+                # keep waiting — but only up to SSE_MAX_KEEPALIVES times. A
+                # worker that stays silent that long is declared hung so the
+                # stream errors out and the task entry is reclaimed instead of
+                # leaking keep-alives (and the task/queue entry) forever.
+                idle_rounds += 1
+                if (tasks_mod._sse_idle_decision(tasks_mod.tasks.get(task_id)) == "keep-alive"
+                        and idle_rounds < tasks_mod.SSE_MAX_KEEPALIVES + 1):
                     yield ": keep-alive\n\n"
                     continue
-                yield f"data: {json.dumps({'status': 'error', 'message': 'Timeout: No updates for 5 minutes'})}\n\n"
+                if tasks_mod.tasks.get(task_id) and not tasks_mod.tasks[task_id].get("completed"):
+                    msg = "Worker unresponsive — closing the stream"
+                else:
+                    msg = "Timeout: No updates for 5 minutes"
+                yield f"data: {json.dumps({'status': 'error', 'message': msg})}\n\n"
                 break
+            idle_rounds = 0
             if ev is None:
                 continue
             if isinstance(ev, dict) and ev.get("__done__"):
