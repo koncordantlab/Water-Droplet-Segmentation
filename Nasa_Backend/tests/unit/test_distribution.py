@@ -1,6 +1,9 @@
 """Size-distribution binning invariants: log-spaced global edges, stats blocks,
 long-format histogram frames. New coverage (no prior standalone script)."""
+import math
+
 import numpy as np
+import pytest
 
 
 def test_shared_bin_edges_are_log_spaced(app_module):
@@ -89,3 +92,13 @@ def test_stats_and_histogram_rounding_precision(app_module):
         float(np.round((1.11111 + 2.22222) / 2.0, 3)),
         float(np.round((2.22222 + 4.44444) / 2.0, 3)),
     ]
+
+
+@pytest.mark.xfail(reason="lands in Task 5", strict=True)
+def test_eq_diameter_formula():
+    # d = sqrt(4A/pi): area pi/4 -> d = 1
+    from nasa_backend import distribution
+
+    out = distribution._eq_diameter([math.pi / 4.0, 16.0])
+    assert out[0] == pytest.approx(1.0, abs=1e-12)
+    assert out[1] == pytest.approx(math.sqrt(64.0 / math.pi), abs=1e-12)

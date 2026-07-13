@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import torch
 
-from nasa_backend import masks
+from nasa_backend import masks, metrics
 
 DEVICES = [
     "cpu",
@@ -258,7 +258,7 @@ def test_mask_areas_from_source_matches_cv2_sum(device):
             )
 
 
-def test_per_instance_basic_areas_equals_masks_path(app_module, device):
+def test_per_instance_basic_areas_equals_masks_path(device):
     # In basic mode, passing precomputed GPU areas (masks=None) must yield the
     # exact same rows as the original masks-based path -- including area==0 skips.
     rng = np.random.default_rng(11)
@@ -271,12 +271,12 @@ def test_per_instance_basic_areas_equals_masks_path(app_module, device):
     class_names = ["water", "ice", "water", "ice", "water", "ice", "water", "ice"]
     boxes = [_FakeBox(0.5 + 0.01 * k) for k in range(n)]
     areas = masks._mask_areas_from_source(binm, dh, dw)
-    ref = app_module._per_instance_metrics(full_list, boxes, class_names, (dh, dw), mode="basic")
-    new = app_module._per_instance_metrics(None, boxes, class_names, (dh, dw), mode="basic", areas=areas)
+    ref = metrics._per_instance_metrics(full_list, boxes, class_names, (dh, dw), mode="basic")
+    new = metrics._per_instance_metrics(None, boxes, class_names, (dh, dw), mode="basic", areas=areas)
     assert ref == new, f"basic per-instance differs with areas: {ref} vs {new}"
 
 
-def test_per_instance_full_mode_areas_match_recompute(app_module, device):
+def test_per_instance_full_mode_areas_match_recompute(device):
     # In full mode, passing GPU areas must give identical rows to recomputing
     # int(fm.sum()) internally (areas == mask sums, so all derived metrics match).
     rng = np.random.default_rng(13)
@@ -288,8 +288,8 @@ def test_per_instance_full_mode_areas_match_recompute(app_module, device):
     class_names = ["water", "ice", "water", "ice", "water", "ice"]
     boxes = [_FakeBox(0.5) for _ in range(n)]
     areas = masks._mask_areas_from_source(binm, dh, dw)
-    ref = app_module._per_instance_metrics(full_list, boxes, class_names, (dh, dw), mode="full")
-    new = app_module._per_instance_metrics(full_list, boxes, class_names, (dh, dw), mode="full", areas=areas)
+    ref = metrics._per_instance_metrics(full_list, boxes, class_names, (dh, dw), mode="full")
+    new = metrics._per_instance_metrics(full_list, boxes, class_names, (dh, dw), mode="full", areas=areas)
     assert ref == new, "full-mode per-instance differs when GPU areas are passed"
 
 
