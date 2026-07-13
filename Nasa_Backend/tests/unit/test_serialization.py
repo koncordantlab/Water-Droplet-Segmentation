@@ -6,28 +6,30 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from nasa_backend import serialization
+
 
 @pytest.mark.parametrize("nonfinite", [float("nan"), float("inf"), float("-inf"), np.float64("nan")])
-def test_non_finite_becomes_none(app_module, nonfinite):
-    assert app_module.make_json_serializable(nonfinite) is None
+def test_non_finite_becomes_none(nonfinite):
+    assert serialization.make_json_serializable(nonfinite) is None
 
 
-def test_row_with_non_finite_fields(app_module):
+def test_row_with_non_finite_fields():
     row = {
         "Water Avg Area (µm²)": float("nan"),
         "Resolution (pix/µm²)": np.float64("inf"),
         "Water (%)": 12.5,
     }
-    clean = app_module.make_json_serializable([row])[0]
+    clean = serialization.make_json_serializable([row])[0]
     assert clean["Water Avg Area (µm²)"] is None
     assert clean["Resolution (pix/µm²)"] is None
     assert clean["Water (%)"] == 12.5
     # strict round-trip — same strictness as browser JSON.parse
-    json.loads(json.dumps(app_module.make_json_serializable([row]), allow_nan=False))
+    json.loads(json.dumps(serialization.make_json_serializable([row]), allow_nan=False))
 
 
-def test_numpy_and_pandas_coercions(app_module):
-    ser = app_module.make_json_serializable
+def test_numpy_and_pandas_coercions():
+    ser = serialization.make_json_serializable
     assert ser(np.int64(7)) == 7 and isinstance(ser(np.int64(7)), int)
     assert ser(np.float32(1.5)) == 1.5 and isinstance(ser(np.float32(1.5)), float)
     assert ser(np.bool_(True)) is True
