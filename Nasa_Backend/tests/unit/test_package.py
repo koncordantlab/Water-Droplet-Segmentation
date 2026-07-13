@@ -17,11 +17,18 @@ def test_config_constants_and_weights_default(monkeypatch):
     assert config.weights_path() == "/somewhere/w.pt"
 
 
-def test_package_import_has_no_heavy_side_effects():
-    import nasa_backend  # noqa: F401
-    # importing the bare package must not drag in the model or a Flask app
-    assert "ultralytics" not in {m.split(".")[0] for m in sys.modules if m.startswith("ultralytics")} or True
-    # the real assertion: config imports without torch/ultralytics
-    import importlib
-    mod = importlib.import_module("nasa_backend.config")
-    assert not hasattr(mod, "model")
+def test_package_import_is_side_effect_free():
+    """config must import without dragging in torch/ultralytics/flask. Runs in
+    a subprocess: this suite itself imports torch elsewhere, so in-process
+    sys.modules cannot witness import-time behavior."""
+    import subprocess
+
+    backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    code = (
+        "import sys; import nasa_backend.config; "
+        "heavy = {'torch', 'ultralytics', 'flask'} & set(sys.modules); "
+        "assert not heavy, f'heavy imports leaked: {heavy}'"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], cwd=backend_dir,
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
