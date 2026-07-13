@@ -5,6 +5,8 @@ import HomePage from "./pages/homepage/HomePage";
 import NoCloseModal from "./components/noclosemodal/NoCloseModal";
 import SummaryPage from "./pages/summarypage/SummaryPage";
 
+const API_BASE = process.env.REACT_APP_BACKEND_API_URL || "/api";
+
 const style = {
   position: 'absolute',
   top: '50%',
@@ -78,7 +80,7 @@ export default function App() {
     setExecutionTime(null);
     setSizeDistribution(null);
     try {
-      const resp = await fetch(`${process.env.REACT_APP_BACKEND_API_URL}/process`, {
+      const resp = await fetch(`${API_BASE}/process`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -104,7 +106,7 @@ export default function App() {
   useEffect(() => {
   if (!taskId) return;
 
-  const eventSource = new EventSource(`${process.env.REACT_APP_BACKEND_API_URL}/events/${taskId}`);
+  const eventSource = new EventSource(`${API_BASE}/events/${taskId}`);
 
   eventSource.onmessage = (e) => {
     try {
