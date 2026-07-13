@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import torch
 
-from nasa_backend import masks, metrics
+from nasa_backend import masks, metrics, pipeline
 
 DEVICES = [
     "cpu",
@@ -293,7 +293,7 @@ def test_per_instance_full_mode_areas_match_recompute(device):
     assert ref == new, "full-mode per-instance differs when GPU areas are passed"
 
 
-def test_apply_full_overlay_precomputed_equals_internal(app_module):
+def test_apply_full_overlay_precomputed_equals_internal():
     # The overlay must produce an identical frame whether it resizes the masks
     # itself (old path) or is handed the already-GPU-resized full masks (new).
     # apply_full_overlay works on plain numpy arrays via cv2 -- no torch
@@ -305,10 +305,10 @@ def test_apply_full_overlay_precomputed_equals_internal(app_module):
     masks_np = rng.random((n, sh, sw), dtype=np.float32)
     class_names = ["water", "ice", "water", "ice", "water"]
 
-    ref = app_module.apply_full_overlay(img.copy(), masks_np, class_names)
+    ref = pipeline.apply_full_overlay(img.copy(), masks_np, class_names)
     full = _cv2_ref_full_masks(masks_np, h, w, thresh=0.3)
-    new = app_module.apply_full_overlay(img.copy(), None, class_names,
-                                         full_masks=[full[k] for k in range(n)])
+    new = pipeline.apply_full_overlay(img.copy(), None, class_names,
+                                       full_masks=[full[k] for k in range(n)])
     assert np.array_equal(ref, new), (
         f"overlay differs with precomputed masks: {int((ref != new).sum())} px"
     )
