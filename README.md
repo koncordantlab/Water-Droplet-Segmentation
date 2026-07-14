@@ -60,6 +60,33 @@ python -m pytest -m "local and slow"      # full-mode golden (~10 min); run befo
 
 Tier 1 exercises the pure-Python/numpy modules plus the API/SSE contract against a fake model (no weights or GPU). Tier 2 loads the real weights and runs the two fast basic-mode golden masters; the `slow` marker adds the full-mode golden. Golden masters live in `backend/tests/golden/expected/*.json` — re-record them with `python tests/golden/record_goldens.py` only when a numeric change is intended and reviewed.
 
+## Deployment (Docker)
+
+Merging to `main` builds and publishes `ghcr.io/koncordantlab/water-droplet-segmentation`
+(`:latest` + a per-merge `:sha-<short>`) via `.github/workflows/release.yml`.
+The image contains the API, the built React UI, and CUDA torch — **never the
+weights or any videos** (`.dockerignore` enforces this; they are volume mounts).
+
+One-time host prerequisites: Docker with the NVIDIA Container Toolkit
+(`nvidia-ctk runtime configure --runtime=docker`).
+
+First deploy on the box, in order:
+
+1. Free port 8050 — stop any venv-era `python -m droplet_backend` still running.
+2. `cp deploy/.env.example deploy/.env` and fill in the box's paths and uid/gid.
+3. Make the GHCR package public in its settings — or `docker login ghcr.io` with a `read:packages` token.
+4. `deploy/update.sh` — pulls `:latest`, starts the stack, and waits for it to report healthy.
+5. `deploy/validate.sh latest` — runs the golden-master + GPU bit-exactness suites (including the ~10-min full-mode golden) inside the container. Run it from a checkout at the commit the image was built from: the gate exercises the checkout's code under the image's runtime.
+6. Rollback drill: set `IMAGE_TAG=sha-<short>` (the first release's tag) in `deploy/.env`, re-run `deploy/update.sh`, then set it back to `latest`.
+
+After that, deploying a merge is just `deploy/update.sh`; rolling back is setting
+`IMAGE_TAG=sha-<short>` in `deploy/.env` and re-running it.
+
+The app serves on `127.0.0.1:8050` (UI at `/`, API under `/api/*`). Videos are
+readable from `VIDEO_ROOT` (mounted at its identical host path, so paths pasted
+into the UI keep working and outputs land next to inputs, exactly like a venv
+run).
+
 ## Running the frontend
 
 1. Change to the frontend folder and install packages:

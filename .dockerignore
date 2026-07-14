@@ -1,0 +1,36 @@
+# Never ship or upload: weights, media, generated outputs
+**/*.pt
+**/*.mp4
+**/*.avi
+**/*.xlsx
+**/*.csv
+Test_videos/
+backend/output/
+backend/train_script/
+**/segmentation results/
+**/*_per_frame_xlsx/
+**/*_charts/
+
+# Repo plumbing that has no business in a build context
+.git/
+.github/
+.gitignore
+docs/
+deploy/
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+.superpowers/
+**/__pycache__/
+**/.pytest_cache/
+**/.DS_Store
+.venv/
+venv/
+
+# Tests run against the image via bind mount (deploy/validate.sh), not from inside it
+backend/tests/
+
+# Frontend: the image builds its own bundle from src; never reuse a host build
+frontend/node_modules/
+frontend/build/
+frontend/.env
