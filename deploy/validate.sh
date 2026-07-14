@@ -4,6 +4,8 @@
 # inside the image, against the repo bind-mounted at its identical host path.
 # pytest is installed ephemerally in the container layer; the shipped image
 # stays test-free. Usage: deploy/validate.sh [image-tag]   (default: latest)
+# NOTE: the gate runs the CHECKOUT's code under the image's runtime — run it
+# from a checkout at the commit the image was built from.
 set -euo pipefail
 TAG="${1:-latest}"
 IMAGE="ghcr.io/koncordantlab/water-droplet-segmentation:${TAG}"
