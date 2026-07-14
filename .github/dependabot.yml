@@ -1,0 +1,10 @@
+# Keeps the SHA-pinned actions in .github/workflows/ fresh: Dependabot opens a
+# PR (updating pin + version comment together) when an action releases.
+# Python/npm dependency updates stay manual on purpose — torch and friends are
+# pinned to the golden-master environment and move only with a re-validation.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
