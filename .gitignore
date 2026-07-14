@@ -174,3 +174,8 @@ __pycache__/
 "segmentation results/"
 *summary.xlsx
 *summary.csv
+
+# Local working notes (kept out of the repo)
+CLAUDE.md
+CLAUDE.local.md
+.claude/

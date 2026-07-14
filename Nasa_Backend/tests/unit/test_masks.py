@@ -2,7 +2,7 @@
 Migrated from test_gpu_mask_equivalence.py. Parametrized over device: the cpu
 run is tier 1 (CI); the cuda run is tier 2 (local+gpu) and proves the same
 bit-exactness on the real inference device. Rerun after any OpenCV/torch
-upgrade (CLAUDE.md contract)."""
+upgrade."""
 import cv2
 import numpy as np
 import pytest

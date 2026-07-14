@@ -37,7 +37,16 @@ The backend will open a server on port 8050 by default. Point your browser to:
 
 http://localhost:8050
 
-(Override the host/port with the `NASA_HOST` / `NASA_PORT` environment variables. Other optional variables — `NASA_WEIGHTS_PATH`, `NASA_WEBUI_DIR`, `NASA_VIDEO_ROOTS`, `NASA_CORS_ORIGINS` — are documented in `CLAUDE.md`.)
+All environment variables are optional (defaults shown):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `NASA_HOST` | `127.0.0.1` | Flask bind host. |
+| `NASA_PORT` | `8050` | Flask bind port. |
+| `NASA_WEIGHTS_PATH` | `Nasa_Backend/app_root/weights_DP(8).pt` | YOLO weights file. Loaded lazily on the first `/api/process` call, not at boot. |
+| `NASA_WEBUI_DIR` | auto-detect: `nasa_backend/webui/`, then `../nasa-frontend/build/` | Directory with the built React `index.html` + static assets. If none is found, `/` serves a plain "UI not built" page while `/api/*` keeps working. |
+| `NASA_VIDEO_ROOTS` | the invoking user's home directory | Colon-separated allowlist of directories `/api/process` may read `video_path` from; a path outside every root (after resolving symlinks) is rejected with `403`. |
+| `NASA_CORS_ORIGINS` | `http://localhost:3000` | Comma-separated origins allowed to call `/api/*` with credentials. A literal `*` makes the server refuse to start, since reflected origins plus credentials would defeat the check. |
 
 ## Running backend tests
 
@@ -49,7 +58,7 @@ python -m pytest -m "local and not slow"  # tier 2: GPU + weights; required befo
 python -m pytest -m "local and slow"      # full-mode golden (~10 min); run before merging numeric changes
 ```
 
-See `CLAUDE.md` for what each tier covers and where the golden masters live.
+Tier 1 exercises the pure-Python/numpy modules plus the API/SSE contract against a fake model (no weights or GPU). Tier 2 loads the real weights and runs the two fast basic-mode golden masters; the `slow` marker adds the full-mode golden. Golden masters live in `Nasa_Backend/tests/golden/expected/*.json` — re-record them with `python tests/golden/record_goldens.py` only when a numeric change is intended and reviewed.
 
 ## Running the frontend
 
