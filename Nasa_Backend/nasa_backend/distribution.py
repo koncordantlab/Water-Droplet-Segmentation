@@ -2,7 +2,7 @@
 """Size-distribution math: equivalent-circular diameters, global log-spaced
 bin edges, per-checkpoint stats blocks, and long-format histogram frames.
 Bin edges are global-per-class across checkpoints and log-spaced to pair with
-the frontend's log x-axis — never rebin per checkpoint (CLAUDE.md)."""
+the frontend's log x-axis — never rebin per checkpoint."""
 import numpy as np
 import pandas as pd
 
