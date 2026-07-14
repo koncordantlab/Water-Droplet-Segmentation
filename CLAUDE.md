@@ -44,7 +44,7 @@ Environment variables (all optional; shown with their defaults):
 | `NASA_PORT` | `8050` | Flask bind port. |
 | `NASA_WEBUI_DIR` | auto-detect: `nasa_backend/webui/` then `../nasa-frontend/build/` | Directory containing the built React `index.html` + static assets. If nothing is found at any candidate, `/` serves a plain "UI not built" page while `/api/*` keeps working. |
 | `NASA_VIDEO_ROOTS` | the invoking user's home directory | Colon-separated allowlist of directories (realpath-resolved) that `/api/process` may read `video_path` from. A path outside every root — after resolving symlinks — is rejected with `403` ("Path is outside the allowed video directories (see NASA_VIDEO_ROOTS)"); this gate is new since the Dash-monolith days, which had none. |
-| `NASA_CORS_ORIGINS` | `http://localhost:3000` | Comma-separated list of origins allowed to call `/api/*` with credentials. **Never set this to a literal `*`**: with `supports_credentials=True`, flask-cors can't send back a real wildcard (browsers reject wildcard + credentials together), so it falls back to reflecting whatever `Origin` header the caller sent — i.e. a literal `*` would let any site make credentialed requests. |
+| `NASA_CORS_ORIGINS` | `http://localhost:3000` | Comma-separated list of origins allowed to call `/api/*` with credentials. **Never set this to a literal `*`**: flask-cors reflects the request `Origin` header (because `send_wildcard` defaults to False); combined with `supports_credentials=True`, which sends `Access-Control-Allow-Credentials: true`, this lets any site make credentialed requests — i.e. it would defeat the purpose of the credentials check. |
 
 ### Tracking pipeline (standalone, separate from the `nasa_backend` Flask app)
 `tracking.py` uses hard-coded relative paths (`../Nasa_Backend/...`) so it expects to be run from a **sibling directory** of `Nasa_Backend/` (e.g. an analysis folder), not from inside `Nasa_Backend/` itself. To run from elsewhere, edit the `MODEL_PATH`, `VIDEO_PATH`, `OUTPUT_PATH`, `DETECTIONS_PATH`, `TRACK_LOG_PATH` constants at the top of the file. Default flow:
@@ -116,12 +116,10 @@ The tracker is custom (not ByteTrack / BoT-SORT). It maintains a `Track` datacla
 - **Backend tests**: pytest, run from inside `Nasa_Backend/` in the project's
   Python env (on the lab box that's the conda `droplets` env:
   `~/miniconda3/envs/droplets/bin/python`). Tiers: `python -m pytest -m "not
-  local"` is tier 1 (CPU-only; runs in CI — note the weights are currently
-  tracked in git, so CI runs the real CPU weights load, verified green; the
-  package itself has no import-time side effects and `nasa_backend.model`
-  loads weights lazily on first `predict()`, so tier 1 never touches the
-  weights file — there's nothing left to stub, and the old
-  `NASA_FORCE_YOLO_STUB` conftest knob is gone. `tests/unit/test_pipeline.py`
+  local"` is tier 1 (CPU-only; runs in CI). The weights are tracked in git,
+  which tier-2 golden tests rely on; tier 1 never loads them because model
+  loading is lazy (weights load on first `predict()` call). The old conftest
+  stub and `NASA_FORCE_YOLO_STUB` knob are gone. `tests/unit/test_pipeline.py`
   runs `pipeline.process_video()` end-to-end against a tier-1 `_FakeModel`,
   pinning checkpoint selection and the seven avg-size headers with no real
   YOLO/GPU involved); `python -m pytest -m "local
