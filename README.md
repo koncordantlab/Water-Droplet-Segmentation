@@ -1,12 +1,12 @@
 # Water Droplet — Full Stack Project
 
-This repository contains the full stack Water Droplet project. It includes a Python backend (a Flask server, the `nasa_backend` package) in `Nasa_Backend/` and a React frontend in `nasa-frontend/`.
+This repository contains the full stack Water Droplet project. It includes a Python backend (a Flask server, the `droplet_backend` package) in `backend/` and a React frontend in `frontend/`.
 
 ## Running the backend
 
 1. Change to the backend folder:
 ```bash
-cd Nasa_Backend
+cd backend
 ```
 
 2. Create and activate a virtual environment (recommended):
@@ -30,7 +30,7 @@ pip install -r requirements.txt
 4. Run the backend:
 
 ```bash
-python -m nasa_backend
+python -m droplet_backend
 ```
 
 The backend will open a server on port 8050 by default. Point your browser to:
@@ -41,16 +41,16 @@ All environment variables are optional (defaults shown):
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `NASA_HOST` | `127.0.0.1` | Flask bind host. |
-| `NASA_PORT` | `8050` | Flask bind port. |
-| `NASA_WEIGHTS_PATH` | `Nasa_Backend/app_root/weights_DP(8).pt` | YOLO weights file. Loaded lazily on the first `/api/process` call, not at boot. |
-| `NASA_WEBUI_DIR` | auto-detect: `nasa_backend/webui/`, then `../nasa-frontend/build/` | Directory with the built React `index.html` + static assets. If none is found, `/` serves a plain "UI not built" page while `/api/*` keeps working. |
-| `NASA_VIDEO_ROOTS` | the invoking user's home directory | Colon-separated allowlist of directories `/api/process` may read `video_path` from; a path outside every root (after resolving symlinks) is rejected with `403`. |
-| `NASA_CORS_ORIGINS` | `http://localhost:3000` | Comma-separated origins allowed to call `/api/*` with credentials. A literal `*` makes the server refuse to start, since reflected origins plus credentials would defeat the check. |
+| `DROPLET_HOST` | `127.0.0.1` | Flask bind host. |
+| `DROPLET_PORT` | `8050` | Flask bind port. |
+| `DROPLET_WEIGHTS_PATH` | `backend/app_root/weights_DP(8).pt` | YOLO weights file. Loaded lazily on the first `/api/process` call, not at boot. |
+| `DROPLET_WEBUI_DIR` | auto-detect: `droplet_backend/webui/`, then `../frontend/build/` | Directory with the built React `index.html` + static assets. If none is found, `/` serves a plain "UI not built" page while `/api/*` keeps working. |
+| `DROPLET_VIDEO_ROOTS` | the invoking user's home directory | Colon-separated allowlist of directories `/api/process` may read `video_path` from; a path outside every root (after resolving symlinks) is rejected with `403`. |
+| `DROPLET_CORS_ORIGINS` | `http://localhost:3000` | Comma-separated origins allowed to call `/api/*` with credentials. A literal `*` makes the server refuse to start, since reflected origins plus credentials would defeat the check. |
 
 ## Running backend tests
 
-From `Nasa_Backend/`, using the project's Python environment:
+From `backend/`, using the project's Python environment:
 
 ```bash
 python -m pytest -m "not local"           # tier 1: CPU-only, no weights/GPU needed (this is what CI runs)
@@ -58,23 +58,23 @@ python -m pytest -m "local and not slow"  # tier 2: GPU + weights; required befo
 python -m pytest -m "local and slow"      # full-mode golden (~10 min); run before merging numeric changes
 ```
 
-Tier 1 exercises the pure-Python/numpy modules plus the API/SSE contract against a fake model (no weights or GPU). Tier 2 loads the real weights and runs the two fast basic-mode golden masters; the `slow` marker adds the full-mode golden. Golden masters live in `Nasa_Backend/tests/golden/expected/*.json` — re-record them with `python tests/golden/record_goldens.py` only when a numeric change is intended and reviewed.
+Tier 1 exercises the pure-Python/numpy modules plus the API/SSE contract against a fake model (no weights or GPU). Tier 2 loads the real weights and runs the two fast basic-mode golden masters; the `slow` marker adds the full-mode golden. Golden masters live in `backend/tests/golden/expected/*.json` — re-record them with `python tests/golden/record_goldens.py` only when a numeric change is intended and reviewed.
 
 ## Running the frontend
 
 1. Change to the frontend folder and install packages:
 
 ```bash
-cd nasa-frontend
+cd frontend
 npm install
 ```
 
 2. Configure the frontend environment so it can reach the backend server running on port 8050.
 
-Create a `.env` file in `nasa-frontend/` (example):
+Create a `.env` file in `frontend/` (example):
 
 ```
-# Example `nasa-frontend/.env` content
+# Example `frontend/.env` content
 REACT_APP_BACKEND_API_URL=http://localhost:8050/api
 ```
 
@@ -102,8 +102,8 @@ git add .
 Instead, add specific files or directories explicitly, for example:
 
 ```bash
-git add nasa-frontend/src/components/MyComponent.js
-git add Nasa_Backend/nasa_backend/api/routes.py
+git add frontend/src/components/MyComponent.js
+git add backend/droplet_backend/api/routes.py
 ```
 
 - Useful git workflow tips:
