@@ -1,6 +1,6 @@
 # Water Droplet — Full Stack Project
 
-This repository contains the full stack Water Droplet project. It includes a Python backend (Dash/Flask-style server) in `Nasa_Backend/` and a React frontend in `nasa-frontend/`.
+This repository contains the full stack Water Droplet project. It includes a Python backend (a Flask server, the `nasa_backend` package) in `Nasa_Backend/` and a React frontend in `nasa-frontend/`.
 
 ## Running the backend
 
@@ -27,17 +27,29 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-4. Run the backend server file:
+4. Run the backend:
 
 ```bash
-python3 frontend_nasa13_apiV2.py
+python -m nasa_backend
 ```
 
 The backend will open a server on port 8050 by default. Point your browser to:
 
 http://localhost:8050
 
-(If your environment or code uses a different host/port, follow any printed output from the script.)
+(Override the host/port with the `NASA_HOST` / `NASA_PORT` environment variables. Other optional variables — `NASA_WEIGHTS_PATH`, `NASA_WEBUI_DIR`, `NASA_VIDEO_ROOTS`, `NASA_CORS_ORIGINS` — are documented in `CLAUDE.md`.)
+
+## Running backend tests
+
+From `Nasa_Backend/`, using the project's Python environment:
+
+```bash
+python -m pytest -m "not local"           # tier 1: CPU-only, no weights/GPU needed (this is what CI runs)
+python -m pytest -m "local and not slow"  # tier 2: GPU + weights; required before opening a PR
+python -m pytest -m "local and slow"      # full-mode golden (~10 min); run before merging numeric changes
+```
+
+See `CLAUDE.md` for what each tier covers and where the golden masters live.
 
 ## Running the frontend
 
@@ -82,7 +94,7 @@ Instead, add specific files or directories explicitly, for example:
 
 ```bash
 git add nasa-frontend/src/components/MyComponent.js
-git add Nasa_Backend/frontend_nasa13_apiV2.py
+git add Nasa_Backend/nasa_backend/api/routes.py
 ```
 
 - Useful git workflow tips:
