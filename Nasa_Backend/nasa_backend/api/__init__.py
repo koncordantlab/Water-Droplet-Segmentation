@@ -32,6 +32,10 @@ def create_app():
     # and never triggers CORS. Comma-separated env override.
     origins = [o.strip() for o in
                os.environ.get("NASA_CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
+    if "*" in origins:
+        raise RuntimeError(
+            "NASA_CORS_ORIGINS must not contain '*': with credentials enabled, "
+            "flask-cors would reflect any origin. List explicit origins instead.")
     CORS(app, resources={r"/api/*": {"origins": origins}}, supports_credentials=True)
     from nasa_backend.api.routes import api_bp
     app.register_blueprint(api_bp)

@@ -10,6 +10,7 @@ import uuid
 from queue import Empty, Queue
 
 from flask import Blueprint, Response, jsonify, request, send_file, stream_with_context
+from werkzeug.utils import safe_join
 
 from nasa_backend import pipeline
 from nasa_backend.api import tasks as tasks_mod
@@ -65,11 +66,21 @@ def api_process():
     # a path that hasn't cleared the allowlist (CodeQL py/path-injection), and
     # the worker closure captures this same frozen canonical path (TOCTOU).
     video_path = os.path.realpath(video_path)
-    if not _path_allowed(video_path):
+    matched_root = next((r for r in _video_roots()
+                         if video_path == r or video_path.startswith(r + os.sep)), None)
+    if matched_root is None:
         return jsonify({"status": "error",
                         "message": "Path is outside the allowed video directories (see NASA_VIDEO_ROOTS)"}), 403
-    if not (os.path.isfile(video_path) or os.path.isdir(video_path)):
+    # Rebuild the path through safe_join so every later filesystem access uses
+    # a scanner-recognized sanitized value; for a path already under
+    # matched_root this reconstructs the identical string.
+    if video_path == matched_root:
+        safe_path = matched_root
+    else:
+        safe_path = safe_join(matched_root, os.path.relpath(video_path, matched_root))
+    if safe_path is None or not (os.path.isfile(safe_path) or os.path.isdir(safe_path)):
         return jsonify({"status": "error", "message": f"Path is neither a file nor a directory: {video_path}"}), 400
+    video_path = safe_path
 
     task_id = uuid.uuid4().hex
     task_queue = Queue()

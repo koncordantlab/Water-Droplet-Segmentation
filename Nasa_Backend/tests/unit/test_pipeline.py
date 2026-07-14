@@ -4,6 +4,7 @@ model — no weights, no GPU. Pins checkpoint selection (N, 2N, ..., final),
 the seven avg-size headers byte-identical across Per-Frame and Summary
 sheets, and the size_distribution payload shape."""
 import os
+import time
 
 import cv2
 import numpy as np
@@ -45,6 +46,16 @@ class _FakeResult:
 class _FakeModel:
     def predict(self, frames):
         return [_FakeResult(64, 64) for _ in frames]
+
+
+class _SlowFakeModel(_FakeModel):
+    """Adds measurable wall-clock time per batch so the naive eta estimate
+    (elapsed * (total//stride / processed - 1)) goes deterministically negative
+    once processed frames exceed the floor estimate."""
+
+    def predict(self, frames):
+        time.sleep(0.05)
+        return super().predict(frames)
 
 
 @pytest.fixture
@@ -131,3 +142,38 @@ def test_dist_interval_zero_yields_no_size_distribution(synthetic_video, tmp_pat
         output_dir=str(tmp_path / "out2"), output_mode="basic", um_per_px=None,
     )
     assert size_dist is None
+
+
+@pytest.fixture
+def synthetic_video_45(tmp_path):
+    """45 frames at 10 fps -> stride 10 -> 5 processed frames. total_frames is
+    NOT a multiple of stride: the floor estimate is 45 // 10 = 4, so the naive
+    progress hits 5*10/45 = 111.11% and the naive eta goes negative on the
+    fifth processed frame."""
+    path = str(tmp_path / "synth45.mp4")
+    w = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), 10, (64, 64))
+    for i in range(45):
+        frame = np.full((64, 64, 3), i % 255, dtype=np.uint8)
+        w.write(frame)
+    w.release()
+    assert os.path.getsize(path) > 0
+    return path
+
+
+def test_progress_and_eta_are_clamped(synthetic_video_45, tmp_path, monkeypatch):
+    """SSE progress must never exceed 100% and eta must never be negative,
+    even when total_frames is not a multiple of stride (floor estimate vs
+    ceil actual)."""
+    monkeypatch.setattr(model_mod, "get_model", lambda: _SlowFakeModel())
+    events = []
+    pipeline.process_video(
+        synthetic_video_45, save_ovl=False, dist_interval=0,
+        output_dir=str(tmp_path / "out45"), progress_callback=events.append,
+        output_mode="basic", um_per_px=None,
+    )
+    processing = [e for e in events if e.get("status") == "processing"]
+    assert len(processing) == 5
+    bad_progress = [e["progress"] for e in processing if e["progress"] > 100.0]
+    assert not bad_progress, f"progress exceeded 100%: {bad_progress}"
+    bad_eta = [e["eta"] for e in processing if e["eta"] is not None and e["eta"] < 0.0]
+    assert not bad_eta, f"eta went negative: {bad_eta}"

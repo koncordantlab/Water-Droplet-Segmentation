@@ -342,8 +342,11 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
                         "message": f"Processed frame {current_processed_frame}",
                         "processed_frame": current_processed_frame,
                         # eta in seconds (rounded to 2 decimal places) = elapsed_time * (estimated_total_frames / processed_frames - 1)
-                        "eta": round((time.time() - start_time) * ( (total_frames // stride) / current_processed_frame - 1), 2) if current_processed_frame > 0 else None,
-                        "progress": round((current_processed_frame * stride) / total_frames * 100, 2)
+                        # clamped to >= 0 / <= 100: the frame estimate is a floor (total_frames // stride),
+                        # so when total_frames isn't a multiple of stride the actual processed count can
+                        # exceed it, pushing the naive eta negative and the naive progress past 100%.
+                        "eta": max(0.0, round((time.time() - start_time) * ( (total_frames // stride) / current_processed_frame - 1), 2)) if current_processed_frame > 0 else None,
+                        "progress": min(100.0, round((current_processed_frame * stride) / total_frames * 100, 2))
                     })
 
         print("🚀 Starting video processing...")

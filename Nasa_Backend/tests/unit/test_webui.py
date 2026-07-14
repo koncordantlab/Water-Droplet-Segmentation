@@ -57,3 +57,17 @@ def test_cors_allows_configured_origin_only(monkeypatch):
     assert ok.headers.get("Access-Control-Allow-Origin") == "http://localhost:3000"
     bad = client.get("/api/status", headers={"Origin": "https://evil.example"})
     assert bad.headers.get("Access-Control-Allow-Origin") is None
+
+
+def test_wildcard_cors_refuses_to_start(monkeypatch):
+    """A literal '*' origin with supports_credentials=True would reflect any
+    Origin with Allow-Credentials: true — the factory must fail fast instead."""
+    monkeypatch.setenv("NASA_CORS_ORIGINS", "*")
+    with pytest.raises(RuntimeError, match="NASA_CORS_ORIGINS must not contain"):
+        _fresh_app()
+
+
+def test_wildcard_cors_refused_even_among_other_origins(monkeypatch):
+    monkeypatch.setenv("NASA_CORS_ORIGINS", "http://localhost:3000,*")
+    with pytest.raises(RuntimeError):
+        _fresh_app()
