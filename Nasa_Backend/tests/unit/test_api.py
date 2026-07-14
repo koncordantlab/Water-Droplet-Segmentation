@@ -96,14 +96,21 @@ def test_process_full_flow_final_payload(app, monkeypatch, tmp_path):
                         "dist_interval": 5, "output_mode": "basic", "um_per_px": 2.5}
 
 
-def test_process_validation_errors(app):
+def test_process_validation_errors(app, tmp_path):
     client = app.test_client()
     r1 = client.post("/api/process", json={})
     assert r1.status_code == 400
     assert r1.get_json() == {"status": "error", "message": "Missing video_path"}
+    # Outside the allowlist (conftest pins NASA_VIDEO_ROOTS to pytest's tmp
+    # root): the gate fires before the existence probe, so this is 403 — the
+    # server never stats a path that hasn't cleared the allowlist.
     r2 = client.post("/api/process", json={"video_path": "/nonexistent/x.mp4"})
-    assert r2.status_code == 400
-    assert r2.get_json()["message"].startswith("Path is neither a file nor a directory")
+    assert r2.status_code == 403
+    assert "allowed video directories" in r2.get_json()["message"]
+    # Inside the allowlist but nonexistent: the existence probe still 400s.
+    r3 = client.post("/api/process", json={"video_path": str(tmp_path / "missing.mp4")})
+    assert r3.status_code == 400
+    assert r3.get_json()["message"].startswith("Path is neither a file nor a directory")
 
 
 def test_process_sanitizes_bad_params(app, monkeypatch, tmp_path):

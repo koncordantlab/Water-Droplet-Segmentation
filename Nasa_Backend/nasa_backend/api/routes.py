@@ -30,11 +30,8 @@ def _video_roots():
 def _path_allowed(p):
     rp = os.path.realpath(p)
     for root in _video_roots():
-        try:
-            if os.path.commonpath([rp, root]) == root:
-                return True
-        except ValueError:  # e.g. different drives; treat as not allowed
-            continue
+        if rp == root or rp.startswith(root + os.sep):
+            return True
     return False
 
 
@@ -64,15 +61,15 @@ def api_process():
         um_per_px = None
     if not video_path:
         return jsonify({"status": "error", "message": "Missing video_path"}), 400
-    if not (os.path.isfile(video_path) or os.path.isdir(video_path)):
-        return jsonify({"status": "error", "message": f"Path is neither a file nor a directory: {video_path}"}), 400
-    # Resolve ONCE, before the gate, so the checked path and the used path are
-    # the same resolution (no check/use divergence window); the worker closure
-    # then captures this frozen canonical path (TOCTOU).
+    # Resolve ONCE, then gate, then probe: the existence check must never touch
+    # a path that hasn't cleared the allowlist (CodeQL py/path-injection), and
+    # the worker closure captures this same frozen canonical path (TOCTOU).
     video_path = os.path.realpath(video_path)
     if not _path_allowed(video_path):
         return jsonify({"status": "error",
                         "message": "Path is outside the allowed video directories (see NASA_VIDEO_ROOTS)"}), 403
+    if not (os.path.isfile(video_path) or os.path.isdir(video_path)):
+        return jsonify({"status": "error", "message": f"Path is neither a file nor a directory: {video_path}"}), 400
 
     task_id = uuid.uuid4().hex
     task_queue = Queue()

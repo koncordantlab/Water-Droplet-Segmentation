@@ -5,6 +5,7 @@ import os
 
 from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
+from werkzeug.utils import safe_join
 
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -42,8 +43,11 @@ def create_app():
         def webui_serve(path="index.html"):
             if path.startswith("api/"):
                 return jsonify({"status": "error", "message": "Unknown API route"}), 404
-            full = os.path.join(webui, path)
-            if path != "index.html" and os.path.isfile(full):
+            # safe_join returns None for traversal attempts, so the isfile
+            # probe below never sees a path escaping the webui dir (CodeQL
+            # py/path-injection); send_from_directory re-checks on its own.
+            full = safe_join(webui, path)
+            if path != "index.html" and full and os.path.isfile(full):
                 return send_from_directory(webui, path)
             return send_from_directory(webui, "index.html")
     else:
