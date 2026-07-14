@@ -41,7 +41,7 @@ def create_app():
         @app.route("/")
         @app.route("/<path:path>")
         def webui_serve(path="index.html"):
-            if path.startswith("api/"):
+            if path == "api" or path.startswith("api/"):
                 return jsonify({"status": "error", "message": "Unknown API route"}), 404
             # safe_join returns None for traversal attempts, so the isfile
             # probe below never sees a path escaping the webui dir (CodeQL

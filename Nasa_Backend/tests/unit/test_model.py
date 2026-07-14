@@ -1,5 +1,8 @@
 """SegmentationModel is lazy: constructing it never loads weights; predict()
 loads exactly once; inference params are the frozen constants."""
+import threading
+import time
+
 import nasa_backend.model as model_mod
 
 
@@ -44,6 +47,48 @@ def test_get_model_is_a_singleton(monkeypatch):
     a = model_mod.get_model()
     b = model_mod.get_model()
     assert a is b
+    monkeypatch.setattr(model_mod, "_instance", None)  # don't leak to other tests
+
+
+def test_concurrent_first_requests_load_yolo_exactly_once(monkeypatch):
+    """Two (here: eight) simultaneous first requests must not double-load YOLO:
+    get_model() must hand every thread the SAME SegmentationModel, and the
+    first load must be serialized so YOLO is constructed exactly once. The
+    fake's 50 ms __init__ sleep holds the race window open (the GIL is
+    released while sleeping), making the unsynchronized paths fail
+    deterministically."""
+    class _SlowFakeYOLO(_FakeYOLO):
+        def __init__(self, path):
+            time.sleep(0.05)  # widen the check-then-act window before counting
+            super().__init__(path)
+
+    monkeypatch.setattr(model_mod, "YOLO", _SlowFakeYOLO)
+    monkeypatch.setattr(model_mod, "_instance", None)
+    monkeypatch.setenv("NASA_WEIGHTS_PATH", "/w.pt")
+    _FakeYOLO.instances = 0
+
+    n = 8
+    barrier = threading.Barrier(n)
+    models, errors = [], []
+
+    def first_request():
+        try:
+            barrier.wait(timeout=5)  # maximize contention: all threads start together
+            m = model_mod.get_model()
+            m.predict(["f"])
+            models.append(m)
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=first_request) for _ in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    assert not errors, f"worker threads raised: {errors!r}"
+    assert len(models) == n
+    assert all(m is models[0] for m in models), "every thread must get the same model object"
+    assert _FakeYOLO.instances == 1, f"YOLO constructed {_FakeYOLO.instances} times; must be exactly once"
     monkeypatch.setattr(model_mod, "_instance", None)  # don't leak to other tests
 
 

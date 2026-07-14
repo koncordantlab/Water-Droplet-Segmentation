@@ -31,6 +31,16 @@ def test_api_routes_not_shadowed(webui):
     assert client.get("/api/nonexistent").status_code == 404
 
 
+def test_bare_api_is_json_404_not_index(webui):
+    """GET /api (no trailing slash) must be an API-style JSON 404, not the SPA
+    index.html — the startswith("api/") guard alone misses the bare path."""
+    client = _fresh_app().test_client()
+    r = client.get("/api")
+    assert r.status_code == 404
+    body = r.get_json()
+    assert body == {"status": "error", "message": "Unknown API route"}
+
+
 def test_missing_bundle_degrades_gracefully(monkeypatch, tmp_path):
     monkeypatch.setenv("NASA_WEBUI_DIR", str(tmp_path / "nowhere"))
     client = _fresh_app().test_client()

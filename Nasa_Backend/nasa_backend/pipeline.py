@@ -119,6 +119,7 @@ def process_video(video_path: str, save_ovl: bool = True, dist_interval: int = 0
     if not cap.isOpened():
         if progress_callback:
             progress_callback({"status": "error", "message": f"Could not open video file: {video_path}"})
+        cap.release()  # the try/finally that releases the healthy path starts below this return
         return (f"❌ Error: Could not open video file {video_path}", None, None, None, None, None, None)
 
     video_fps = cap.get(cv2.CAP_PROP_FPS)

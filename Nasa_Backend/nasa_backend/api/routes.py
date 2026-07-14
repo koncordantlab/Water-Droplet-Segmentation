@@ -121,7 +121,6 @@ def api_process():
                     print(f"   - {_v}")
                 if not videos:
                     push({"status": "error", "message": f"No video files found in directory: {video_path}"})
-                    task_queue.put_nowait({"status": "error", "message": f"No video files found in directory: {video_path}"})
                     return
 
                 batch_results = []

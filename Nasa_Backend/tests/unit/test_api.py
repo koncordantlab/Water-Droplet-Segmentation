@@ -198,6 +198,21 @@ def test_process_freezes_symlink_resolution_at_check_time(app, monkeypatch, tmp_
     assert "/link/" not in captured["path"]
 
 
+def test_batch_mode_empty_dir_emits_single_error_event(app, monkeypatch, tmp_path):
+    """An allowed directory with no videos must produce exactly ONE error
+    event (not the same error enqueued twice) and still close the stream."""
+    empty = tmp_path / "empty_batch"
+    empty.mkdir()
+    monkeypatch.setenv("NASA_VIDEO_ROOTS", str(empty))
+    r = app.test_client().post("/api/process", json={"video_path": str(empty)})
+    assert r.status_code == 202
+    events = _data_events(_drain_sse(app, r.get_json()["task_id"]))
+    errors = [e for e in events if e.get("status") == "error"]
+    assert len(errors) == 1, f"expected one error event, got: {errors!r}"
+    assert "No video files found in directory" in errors[0]["message"]
+    assert events[-1] == {"status": "closed"}
+
+
 def test_batch_mode_skips_escapes_and_freezes_entries(app, monkeypatch, tmp_path):
     from nasa_backend import pipeline
     allowed = tmp_path / "allowed"
