@@ -1,13 +1,13 @@
-# nasa_backend/excel.py
+# droplet_backend/excel.py
 """Per-frame per-instance workbooks (full: five sheets, basic: three).
-Column reference: Nasa_Backend/per_frame_xlsx_schema.md. Histogram sheets
+Column reference: backend/per_frame_xlsx_schema.md. Histogram sheets
 reuse the plot's global log-spaced edges — never recompute bins per frame."""
 import os
 
 import pandas as pd
 
-from nasa_backend.distribution import _global_bin_edges_from_size_distribution, _histogram_df
-from nasa_backend.metrics import _apply_metric, _stats_row
+from droplet_backend.distribution import _global_bin_edges_from_size_distribution, _histogram_df
+from droplet_backend.metrics import _apply_metric, _stats_row
 
 
 def _save_per_frame_instance_xlsx(per_frame_rows, out_dir, video_base, video_meta,

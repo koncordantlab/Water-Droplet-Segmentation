@@ -7,8 +7,8 @@ import time
 
 import numpy as np
 
-from nasa_backend import pipeline
-from nasa_backend.api import routes
+from droplet_backend import pipeline
+from droplet_backend.api import routes
 
 
 def _drain_sse(app, task_id, deadline_s=10.0):
@@ -82,7 +82,7 @@ def test_process_full_flow_final_payload(app, monkeypatch, tmp_path):
     assert data["charts"]["donuts"]["water_count"] == 3
     assert data["size_distribution"] == size_dist
     assert data["execution_time"] == 1.23
-    from nasa_backend.api import tasks as tasks_mod
+    from droplet_backend.api import tasks as tasks_mod
     assert "/api/download_summary?id=" in data["download_url"]
     did = data["download_url"].rsplit("id=", 1)[1]
     assert tasks_mod.downloads[did] == str(excel)
@@ -101,7 +101,7 @@ def test_process_validation_errors(app, tmp_path):
     r1 = client.post("/api/process", json={})
     assert r1.status_code == 400
     assert r1.get_json() == {"status": "error", "message": "Missing video_path"}
-    # Outside the allowlist (conftest pins NASA_VIDEO_ROOTS to pytest's tmp
+    # Outside the allowlist (conftest pins DROPLET_VIDEO_ROOTS to pytest's tmp
     # root): the gate fires before the existence probe, so this is 403 — the
     # server never stats a path that hasn't cleared the allowlist.
     r2 = client.post("/api/process", json={"video_path": "/nonexistent/x.mp4"})
@@ -136,7 +136,7 @@ def test_process_sanitizes_bad_params(app, monkeypatch, tmp_path):
 
 
 def test_download_summary_serves_only_registered_ids(app, tmp_path):
-    from nasa_backend.api import tasks as tasks_mod
+    from droplet_backend.api import tasks as tasks_mod
     f = tmp_path / "summary.xlsx"
     f.write_bytes(b"PK\x03\x04data")
     client = app.test_client()
@@ -155,17 +155,17 @@ def test_process_rejects_paths_outside_allowed_roots(app, monkeypatch, tmp_path)
     outside.mkdir()
     vid = outside / "v.mp4"
     vid.write_bytes(b"\x00")
-    monkeypatch.setenv("NASA_VIDEO_ROOTS", str(allowed))
+    monkeypatch.setenv("DROPLET_VIDEO_ROOTS", str(allowed))
     r = app.test_client().post("/api/process", json={"video_path": str(vid)})
     assert r.status_code == 403
     assert "allowed video directories" in r.get_json()["message"]
 
 
 def test_process_accepts_paths_inside_allowed_roots(app, monkeypatch, tmp_path):
-    from nasa_backend import pipeline
+    from droplet_backend import pipeline
     vid = tmp_path / "v.mp4"
     vid.write_bytes(b"\x00")
-    monkeypatch.setenv("NASA_VIDEO_ROOTS", f"/nonexistent-root:{tmp_path}")
+    monkeypatch.setenv("DROPLET_VIDEO_ROOTS", f"/nonexistent-root:{tmp_path}")
     monkeypatch.setattr(pipeline, "process_video",
                         lambda *a, **k: ("✅ ok", None, None, None, None, 0.1, None))
     r = app.test_client().post("/api/process", json={"video_path": str(vid)})
@@ -173,14 +173,14 @@ def test_process_accepts_paths_inside_allowed_roots(app, monkeypatch, tmp_path):
 
 
 def test_process_freezes_symlink_resolution_at_check_time(app, monkeypatch, tmp_path):
-    from nasa_backend import pipeline
+    from droplet_backend import pipeline
     real_dir = tmp_path / "real"
     real_dir.mkdir()
     vid = real_dir / "v.mp4"
     vid.write_bytes(b"\x00")
     link_dir = tmp_path / "link"
     link_dir.symlink_to(real_dir, target_is_directory=True)
-    monkeypatch.setenv("NASA_VIDEO_ROOTS", str(tmp_path))
+    monkeypatch.setenv("DROPLET_VIDEO_ROOTS", str(tmp_path))
     captured = {}
 
     def fake_process_video(video_path, *a, **k):
@@ -203,7 +203,7 @@ def test_batch_mode_empty_dir_emits_single_error_event(app, monkeypatch, tmp_pat
     event (not the same error enqueued twice) and still close the stream."""
     empty = tmp_path / "empty_batch"
     empty.mkdir()
-    monkeypatch.setenv("NASA_VIDEO_ROOTS", str(empty))
+    monkeypatch.setenv("DROPLET_VIDEO_ROOTS", str(empty))
     r = app.test_client().post("/api/process", json={"video_path": str(empty)})
     assert r.status_code == 202
     events = _data_events(_drain_sse(app, r.get_json()["task_id"]))
@@ -214,7 +214,7 @@ def test_batch_mode_empty_dir_emits_single_error_event(app, monkeypatch, tmp_pat
 
 
 def test_batch_mode_skips_escapes_and_freezes_entries(app, monkeypatch, tmp_path):
-    from nasa_backend import pipeline
+    from droplet_backend import pipeline
     allowed = tmp_path / "allowed"
     allowed.mkdir()
     outside = tmp_path / "outside"
@@ -223,7 +223,7 @@ def test_batch_mode_skips_escapes_and_freezes_entries(app, monkeypatch, tmp_path
     (allowed / "alias.mp4").symlink_to(allowed / "in.mp4")
     (outside / "secret.mp4").write_bytes(b"\x00")
     (allowed / "escape.mp4").symlink_to(outside / "secret.mp4")
-    monkeypatch.setenv("NASA_VIDEO_ROOTS", str(allowed))
+    monkeypatch.setenv("DROPLET_VIDEO_ROOTS", str(allowed))
     processed = []
 
     def fake_process_video(video_path, *a, **k):

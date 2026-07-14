@@ -147,7 +147,7 @@ Long-format histogram for the size distribution. **30 rows per sheet** (one per 
 7. Shape descriptors (perimeter, circularity, solidity, hull, feret, ellipse) are computed from that contour.
 8. Overlap columns come from bitwise-AND between this instance's mask and every other instance's mask in the same frame.
 
-The implementation lives in `_per_instance_metrics()` in `nasa_backend/metrics.py`.
+The implementation lives in `_per_instance_metrics()` in `droplet_backend/metrics.py`.
 
 ---
 
@@ -195,4 +195,4 @@ Same fields as Full mode (`processed_frame_number`, `original_video_frame`, `fra
 
 `count / min / max / mean / median / std` per class (water, ice), computed over the **`eq_diameter_um`** values (metric units). NaN-valued instances are excluded; a class with no valid metric values reports `count = 0` and `None` stats.
 
-The Basic-mode implementation lives in `_per_instance_metrics(..., mode="basic")` and `_apply_metric()` in `nasa_backend/metrics.py`, and `_save_per_frame_instance_xlsx(..., mode="basic", um_per_px=...)` in `nasa_backend/excel.py`.
+The Basic-mode implementation lives in `_per_instance_metrics(..., mode="basic")` and `_apply_metric()` in `droplet_backend/metrics.py`, and `_save_per_frame_instance_xlsx(..., mode="basic", um_per_px=...)` in `droplet_backend/excel.py`.

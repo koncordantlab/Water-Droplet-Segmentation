@@ -1,8 +1,8 @@
-# nasa_backend/pipeline.py
+# droplet_backend/pipeline.py
 """process_video orchestration: frame sampling (stride = round(fps)), batches
 of 4, progress/eta events, summary workbook, chart PNGs, size-distribution
 checkpoints, per-frame instance workbooks. Numeric behavior is golden-pinned
-(tests/golden). The model is resolved lazily via nasa_backend.model.get_model()
+(tests/golden). The model is resolved lazily via droplet_backend.model.get_model()
 at call time so tests can monkeypatch it."""
 import os
 import time
@@ -11,24 +11,24 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from nasa_backend import model as model_mod
-from nasa_backend.charts import _save_chart_pngs, _save_size_distribution_pngs
-from nasa_backend.config import ALPHA_OVERLAP, ALPHA_SEG, COLOR_MAP, OVERLAP_COLORS
-from nasa_backend.distribution import (
+from droplet_backend import model as model_mod
+from droplet_backend.charts import _save_chart_pngs, _save_size_distribution_pngs
+from droplet_backend.config import ALPHA_OVERLAP, ALPHA_SEG, COLOR_MAP, OVERLAP_COLORS
+from droplet_backend.distribution import (
     _droplet_stats_block,
     _eq_diameter,
     _shared_bin_edges,
     SIZE_DIST_BINS,
 )
-from nasa_backend.excel import _save_per_frame_instance_xlsx
-from nasa_backend.masks import (
+from droplet_backend.excel import _save_per_frame_instance_xlsx
+from droplet_backend.masks import (
     _classify_overlaps,
     _gather_resize_nn,
     _mask_areas_from_source,
     _overlap_exists_matrix,
     _threshold_masks,
 )
-from nasa_backend.metrics import (
+from droplet_backend.metrics import (
     _avg_size_metrics,
     _per_instance_metrics,
     _resolution_pix_per_um2,

@@ -1,4 +1,4 @@
-# nasa_backend/masks.py
+# droplet_backend/masks.py
 """GPU/CPU mask math pinned bit-identical to cv2 (INTER_NEAREST probe).
 Every function here is covered by tests/unit/test_masks.py — rerun that
 suite after ANY OpenCV or torch upgrade, and never swap the gather for

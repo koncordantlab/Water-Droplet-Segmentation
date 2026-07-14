@@ -33,7 +33,7 @@ const HomePage = ({
     <div className='home-page-container'>
       <div className='left-section-input'>
         <div className="headers">
-            <h1 id="project-header">NASA</h1>
+            <h1 id="project-header">Water Droplet</h1>
             <h2 className="project-descriptor">Video Processing Unit</h2>
         </div>
         <div className="input-section">

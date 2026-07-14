@@ -9,12 +9,12 @@ def webui(tmp_path, monkeypatch):
     (tmp_path / "index.html").write_text("<html><body>REACT</body></html>")
     (tmp_path / "static").mkdir()
     (tmp_path / "static" / "app.js").write_text("console.log(1)")
-    monkeypatch.setenv("NASA_WEBUI_DIR", str(tmp_path))
+    monkeypatch.setenv("DROPLET_WEBUI_DIR", str(tmp_path))
     return tmp_path
 
 
 def _fresh_app():
-    from nasa_backend.api import create_app
+    from droplet_backend.api import create_app
     return create_app()
 
 
@@ -42,7 +42,7 @@ def test_bare_api_is_json_404_not_index(webui):
 
 
 def test_missing_bundle_degrades_gracefully(monkeypatch, tmp_path):
-    monkeypatch.setenv("NASA_WEBUI_DIR", str(tmp_path / "nowhere"))
+    monkeypatch.setenv("DROPLET_WEBUI_DIR", str(tmp_path / "nowhere"))
     client = _fresh_app().test_client()
     r = client.get("/")
     assert r.status_code == 200
@@ -51,7 +51,7 @@ def test_missing_bundle_degrades_gracefully(monkeypatch, tmp_path):
 
 
 def test_cors_allows_configured_origin_only(monkeypatch):
-    monkeypatch.setenv("NASA_CORS_ORIGINS", "http://localhost:3000")
+    monkeypatch.setenv("DROPLET_CORS_ORIGINS", "http://localhost:3000")
     client = _fresh_app().test_client()
     ok = client.get("/api/status", headers={"Origin": "http://localhost:3000"})
     assert ok.headers.get("Access-Control-Allow-Origin") == "http://localhost:3000"
@@ -62,12 +62,12 @@ def test_cors_allows_configured_origin_only(monkeypatch):
 def test_wildcard_cors_refuses_to_start(monkeypatch):
     """A literal '*' origin with supports_credentials=True would reflect any
     Origin with Allow-Credentials: true — the factory must fail fast instead."""
-    monkeypatch.setenv("NASA_CORS_ORIGINS", "*")
-    with pytest.raises(RuntimeError, match="NASA_CORS_ORIGINS must not contain"):
+    monkeypatch.setenv("DROPLET_CORS_ORIGINS", "*")
+    with pytest.raises(RuntimeError, match="DROPLET_CORS_ORIGINS must not contain"):
         _fresh_app()
 
 
 def test_wildcard_cors_refused_even_among_other_origins(monkeypatch):
-    monkeypatch.setenv("NASA_CORS_ORIGINS", "http://localhost:3000,*")
+    monkeypatch.setenv("DROPLET_CORS_ORIGINS", "http://localhost:3000,*")
     with pytest.raises(RuntimeError):
         _fresh_app()

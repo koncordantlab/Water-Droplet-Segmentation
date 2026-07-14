@@ -3,7 +3,7 @@ loads exactly once; inference params are the frozen constants."""
 import threading
 import time
 
-import nasa_backend.model as model_mod
+import droplet_backend.model as model_mod
 
 
 class _FakeYOLO:
@@ -64,7 +64,7 @@ def test_concurrent_first_requests_load_yolo_exactly_once(monkeypatch):
 
     monkeypatch.setattr(model_mod, "YOLO", _SlowFakeYOLO)
     monkeypatch.setattr(model_mod, "_instance", None)
-    monkeypatch.setenv("NASA_WEIGHTS_PATH", "/w.pt")
+    monkeypatch.setenv("DROPLET_WEIGHTS_PATH", "/w.pt")
     _FakeYOLO.instances = 0
 
     n = 8
@@ -96,7 +96,7 @@ def test_default_weights_path_comes_from_config(monkeypatch):
     """The production path: no explicit weights_path -> config.weights_path()
     at load time, env override respected."""
     monkeypatch.setattr(model_mod, "YOLO", _FakeYOLO)
-    monkeypatch.setenv("NASA_WEIGHTS_PATH", "/env/override.pt")
+    monkeypatch.setenv("DROPLET_WEIGHTS_PATH", "/env/override.pt")
     m = model_mod.SegmentationModel()
     m.predict(["f"])
     assert m._model.path == "/env/override.pt"

@@ -1,4 +1,4 @@
-# nasa_backend/api/routes.py
+# droplet_backend/api/routes.py
 """The four REST/SSE routes consumed by the React frontend. Handler bodies are
 verbatim monolith moves; process_video and the task registry are resolved as
 module attributes at call time (monkeypatch-friendly, lazy model)."""
@@ -12,19 +12,19 @@ from queue import Empty, Queue
 from flask import Blueprint, Response, jsonify, request, send_file, stream_with_context
 from werkzeug.utils import safe_join
 
-from nasa_backend import pipeline
-from nasa_backend.api import tasks as tasks_mod
-from nasa_backend.pipeline import _list_videos_in_dir
-from nasa_backend.serialization import make_json_serializable
+from droplet_backend import pipeline
+from droplet_backend.api import tasks as tasks_mod
+from droplet_backend.pipeline import _list_videos_in_dir
+from droplet_backend.serialization import make_json_serializable
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
 
 def _video_roots():
-    """Allowed video roots from NASA_VIDEO_ROOTS (colon-separated); defaults to
+    """Allowed video roots from DROPLET_VIDEO_ROOTS (colon-separated); defaults to
     the invoking user's home directory, preserving the paste-a-path workflow
     while bounding it (CodeQL uncontrolled-path fix)."""
-    raw = os.environ.get("NASA_VIDEO_ROOTS") or os.path.expanduser("~")
+    raw = os.environ.get("DROPLET_VIDEO_ROOTS") or os.path.expanduser("~")
     return [os.path.realpath(r) for r in raw.split(":") if r.strip()]
 
 
@@ -70,7 +70,7 @@ def api_process():
                          if video_path == r or video_path.startswith(r + os.sep)), None)
     if matched_root is None:
         return jsonify({"status": "error",
-                        "message": "Path is outside the allowed video directories (see NASA_VIDEO_ROOTS)"}), 403
+                        "message": "Path is outside the allowed video directories (see DROPLET_VIDEO_ROOTS)"}), 403
     # Rebuild the path through safe_join so every later filesystem access uses
     # a scanner-recognized sanitized value; for a path already under
     # matched_root this reconstructs the identical string.
@@ -126,7 +126,7 @@ def api_process():
                 for v in resolved:
                     (videos if _path_allowed(v) else disallowed).append(v)
                 if disallowed:
-                    print(f"⚠️  Skipping {len(disallowed)} entries resolving outside NASA_VIDEO_ROOTS: {disallowed}")
+                    print(f"⚠️  Skipping {len(disallowed)} entries resolving outside DROPLET_VIDEO_ROOTS: {disallowed}")
                 print(f"📂 Batch mode: found {len(videos)} video(s) in {video_path}")
                 for _v in videos:
                     print(f"   - {_v}")

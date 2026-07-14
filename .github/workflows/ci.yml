@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: Nasa_Backend
+        working-directory: backend
     env:
       MPLBACKEND: Agg
     steps:
@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: Nasa_Backend/requirements.txt
+          cache-dependency-path: backend/requirements.txt
       - name: System libs for OpenCV
         run: sudo apt-get update && sudo apt-get install -y libgl1
       - name: Install CPU torch first (keeps the multi-GB CUDA wheel out of CI)
@@ -37,14 +37,14 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: nasa-frontend
+        working-directory: frontend
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: nasa-frontend/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
       - name: Install
         run: npm ci
       - name: Build

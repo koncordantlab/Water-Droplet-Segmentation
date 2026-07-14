@@ -6,7 +6,7 @@ from queue import Queue
 
 import pytest
 
-from nasa_backend.api import routes, tasks as tasks_mod
+from droplet_backend.api import routes, tasks as tasks_mod
 
 
 def test_idle_decision_keeps_alive_while_worker_runs():
@@ -83,7 +83,7 @@ def test_events_unknown_task_is_404(app):
 
 
 def test_event_stream_gives_up_after_max_keepalives(app, monkeypatch):
-    from nasa_backend.api import routes, tasks as tasks_mod
+    from droplet_backend.api import routes, tasks as tasks_mod
     from queue import Queue
     monkeypatch.setattr(tasks_mod, "SSE_IDLE_TIMEOUT", 0.02)
     monkeypatch.setattr(tasks_mod, "SSE_MAX_KEEPALIVES", 3)

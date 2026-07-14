@@ -1,4 +1,4 @@
-# nasa_backend/api/__init__.py
+# droplet_backend/api/__init__.py
 """Flask app factory: /api/* blueprint + the built React bundle at / (spec §9).
 No import-time side effects — the model loads lazily on first /api/process."""
 import os
@@ -11,10 +11,10 @@ _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def _webui_dir():
-    env = os.environ.get("NASA_WEBUI_DIR")
+    env = os.environ.get("DROPLET_WEBUI_DIR")
     candidates = [env] if env else [
         os.path.abspath(os.path.join(_PKG_DIR, "..", "webui")),                      # Docker copy (PR ③)
-        os.path.abspath(os.path.join(_PKG_DIR, "..", "..", "..", "nasa-frontend", "build")),  # dev checkout
+        os.path.abspath(os.path.join(_PKG_DIR, "..", "..", "..", "frontend", "build")),  # dev checkout
     ]
     for c in candidates:
         if c and os.path.isfile(os.path.join(c, "index.html")):
@@ -31,13 +31,13 @@ def create_app():
     # Dev-server origins only; in production the React bundle is same-origin
     # and never triggers CORS. Comma-separated env override.
     origins = [o.strip() for o in
-               os.environ.get("NASA_CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
+               os.environ.get("DROPLET_CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
     if "*" in origins:
         raise RuntimeError(
-            "NASA_CORS_ORIGINS must not contain '*': with credentials enabled, "
+            "DROPLET_CORS_ORIGINS must not contain '*': with credentials enabled, "
             "flask-cors would reflect any origin. List explicit origins instead.")
     CORS(app, resources={r"/api/*": {"origins": origins}}, supports_credentials=True)
-    from nasa_backend.api.routes import api_bp
+    from droplet_backend.api.routes import api_bp
     app.register_blueprint(api_bp)
 
     webui = _webui_dir()
@@ -57,7 +57,7 @@ def create_app():
     else:
         @app.route("/")
         def webui_missing():
-            return ("<h1>NASA Water Droplet backend</h1>"
-                    "<p>UI not built — run `npm run build` in nasa-frontend/ "
-                    "or set NASA_WEBUI_DIR. The /api/* endpoints are live.</p>"), 200
+            return ("<h1>Water Droplet backend</h1>"
+                    "<p>UI not built — run `npm run build` in frontend/ "
+                    "or set DROPLET_WEBUI_DIR. The /api/* endpoints are live.</p>"), 200
     return app

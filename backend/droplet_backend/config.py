@@ -16,5 +16,5 @@ DEFAULT_WEIGHTS_PATH = os.path.join(_BACKEND_DIR, "app_root", "weights_DP(8).pt"
 
 
 def weights_path():
-    """Weights file location; override with NASA_WEIGHTS_PATH (spec §6)."""
-    return os.environ.get("NASA_WEIGHTS_PATH") or DEFAULT_WEIGHTS_PATH
+    """Weights file location; override with DROPLET_WEIGHTS_PATH (spec §6)."""
+    return os.environ.get("DROPLET_WEIGHTS_PATH") or DEFAULT_WEIGHTS_PATH

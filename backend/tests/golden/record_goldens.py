@@ -1,6 +1,6 @@
 """Record golden-master outputs from the CURRENT code.
 
-Run ONCE on the lab box (real weights + real video), from Nasa_Backend/:
+Run ONCE on the lab box (real weights + real video), from backend/:
 
     ~/miniconda3/envs/droplets/bin/python tests/golden/record_goldens.py
 
@@ -22,7 +22,7 @@ BACKEND_DIR = os.path.dirname(os.path.dirname(HERE))
 REPO_ROOT = os.path.dirname(BACKEND_DIR)
 EXPECTED_DIR = os.path.join(HERE, "expected")
 GOLDEN_VIDEO = os.environ.get(
-    "NASA_GOLDEN_VIDEO", os.path.join(REPO_ROOT, "Test_videos", "10 seconds.mp4")
+    "DROPLET_GOLDEN_VIDEO", os.path.join(REPO_ROOT, "Test_videos", "10 seconds.mp4")
 )
 
 if BACKEND_DIR not in sys.path:
@@ -90,8 +90,8 @@ def load_mod():
     """Namespace with the two entry points the golden harness needs."""
     from types import SimpleNamespace
 
-    from nasa_backend.pipeline import process_video
-    from nasa_backend.serialization import make_json_serializable
+    from droplet_backend.pipeline import process_video
+    from droplet_backend.serialization import make_json_serializable
 
     return SimpleNamespace(process_video=process_video,
                            make_json_serializable=make_json_serializable)
@@ -111,7 +111,7 @@ def main():
         selected = [c for c in CONFIGS if c["name"] in wanted]
 
     assert os.path.isfile(GOLDEN_VIDEO), f"golden video missing: {GOLDEN_VIDEO}"
-    mod = load_mod()  # real weights load (run from Nasa_Backend/)
+    mod = load_mod()  # real weights load (run from backend/)
 
     os.makedirs(EXPECTED_DIR, exist_ok=True)
     written = []

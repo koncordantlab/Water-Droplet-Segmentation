@@ -1,7 +1,7 @@
 """Smoke: the api package builds a Flask app (via create_app) and exposes the
 expected route surface."""
-from nasa_backend.api.tasks import SSE_IDLE_TIMEOUT
-from nasa_backend.config import SIZE_DIST_BINS
+from droplet_backend.api.tasks import SSE_IDLE_TIMEOUT
+from droplet_backend.config import SIZE_DIST_BINS
 
 
 def test_module_imports_and_flask_surface(app):

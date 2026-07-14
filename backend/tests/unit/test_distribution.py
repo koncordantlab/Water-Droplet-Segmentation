@@ -5,7 +5,7 @@ import math
 import numpy as np
 import pytest
 
-from nasa_backend import distribution
+from droplet_backend import distribution
 
 
 def test_shared_bin_edges_are_log_spaced():

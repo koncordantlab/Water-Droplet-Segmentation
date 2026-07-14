@@ -25,7 +25,7 @@ openpyxl==3.1.5
 packaging==25.0
 pandas==2.3.3
 pillow==12.3.0
-# polars / polars-runtime-32: not imported anywhere in nasa_backend or tests;
+# polars / polars-runtime-32: not imported anywhere in droplet_backend or tests;
 # kept because ultralytics declares a hard dependency on polars (pip check
 # fails without it) and polars itself pulls in polars-runtime-32.
 polars==1.35.2

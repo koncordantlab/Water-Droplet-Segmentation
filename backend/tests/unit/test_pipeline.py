@@ -12,8 +12,8 @@ import pandas as pd
 import pytest
 import torch
 
-from nasa_backend import pipeline
-import nasa_backend.model as model_mod
+from droplet_backend import pipeline
+import droplet_backend.model as model_mod
 
 SEVEN_HEADERS = [
     "Water Avg Area (µm²)", "Water Avg Diameter (µm)",

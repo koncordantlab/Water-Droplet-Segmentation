@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import torch
 
-from nasa_backend import masks, metrics, pipeline
+from droplet_backend import masks, metrics, pipeline
 
 DEVICES = [
     "cpu",

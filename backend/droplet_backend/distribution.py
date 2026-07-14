@@ -1,4 +1,4 @@
-# nasa_backend/distribution.py
+# droplet_backend/distribution.py
 """Size-distribution math: equivalent-circular diameters, global log-spaced
 bin edges, per-checkpoint stats blocks, and long-format histogram frames.
 Bin edges are global-per-class across checkpoints and log-spaced to pair with
@@ -6,7 +6,7 @@ the frontend's log x-axis — never rebin per checkpoint."""
 import numpy as np
 import pandas as pd
 
-from nasa_backend.config import SIZE_DIST_BINS
+from droplet_backend.config import SIZE_DIST_BINS
 
 
 def _eq_diameter(areas):

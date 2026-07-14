@@ -11,7 +11,7 @@ import threading
 import torch
 from ultralytics import YOLO
 
-from nasa_backend import config
+from droplet_backend import config
 
 
 class SegmentationModel:

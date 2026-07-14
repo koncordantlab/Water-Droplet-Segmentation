@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from nasa_backend import serialization
+from droplet_backend import serialization
 
 
 @pytest.mark.parametrize("nonfinite", [float("nan"), float("inf"), float("-inf"), np.float64("nan")])

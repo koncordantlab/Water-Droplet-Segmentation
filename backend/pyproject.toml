@@ -24,7 +24,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "nasa-backend"
+name = "droplet-backend"
 version = "0.1.0"
 description = "YOLO droplet segmentation REST/SSE API and analysis pipeline"
 requires-python = ">=3.13"
@@ -42,4 +42,4 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = ["nasa_backend", "nasa_backend.api"]
+packages = ["droplet_backend", "droplet_backend.api"]

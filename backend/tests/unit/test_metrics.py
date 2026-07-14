@@ -6,7 +6,7 @@ import math
 import numpy as np
 import pytest
 
-from nasa_backend import metrics
+from droplet_backend import metrics
 
 
 def test_avg_size_metrics_known_values():

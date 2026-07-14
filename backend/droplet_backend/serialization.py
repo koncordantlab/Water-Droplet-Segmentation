@@ -1,4 +1,4 @@
-# nasa_backend/serialization.py
+# droplet_backend/serialization.py
 """JSON coercion for numpy/pandas payloads (SSE events, golden recording).
 Extend make_json_serializable rather than adding ad-hoc conversions."""
 import math

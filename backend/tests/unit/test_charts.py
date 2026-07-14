@@ -4,7 +4,7 @@ import os
 
 import pandas as pd
 
-from nasa_backend import charts
+from droplet_backend import charts
 
 
 def _sample_inputs():

@@ -1,4 +1,4 @@
-# nasa_backend/metrics.py
+# droplet_backend/metrics.py
 """Per-instance and average droplet-size metrics. The seven avg-size summary
 columns and the per-instance xlsx column set derive from these helpers —
 header strings and NaN-when-no-scale semantics are golden-pinned."""

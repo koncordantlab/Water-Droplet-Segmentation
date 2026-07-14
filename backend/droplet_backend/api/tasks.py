@@ -1,4 +1,4 @@
-# nasa_backend/api/tasks.py
+# droplet_backend/api/tasks.py
 """In-memory task registry shared by the worker threads and the SSE stream.
 State is lost on restart; there is no persistence layer (spec non-goal)."""
 import uuid
