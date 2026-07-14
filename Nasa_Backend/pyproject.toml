@@ -10,8 +10,36 @@ markers = [
 
 [tool.ruff]
 target-version = "py313"
+# train_script/ is an untracked, ad-hoc Roboflow training workspace (dataset
+# dump + throwaway scripts), not part of the shipped package or its tests —
+# exclude it so lint scope matches the package boundary in the git tree.
+exclude = ["train_script"]
 
 [tool.ruff.lint]
-# Fatal-only for the monolith era: syntax errors, invalid prints/comparisons,
-# undefined names. Tightened in phase-0 PR ② once the package split lands.
-select = ["E9", "F63", "F7", "F82"]
+# Package era: full pyflakes (incl. F401 unused imports) + pycodestyle errors.
+select = ["E4", "E7", "E9", "F"]
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nasa-backend"
+version = "0.1.0"
+description = "YOLO droplet segmentation REST/SSE API and analysis pipeline"
+requires-python = ">=3.13"
+dependencies = [
+  "flask>=3.1",
+  "flask-cors>=6.0",
+  "matplotlib>=3.10",
+  "numpy>=2.2",
+  "opencv-python>=4.10",
+  "openpyxl>=3.1",
+  "pandas>=2.3",
+  "torch>=2.9",
+  "torchvision>=0.24",
+  "ultralytics>=8.3",
+]
+
+[tool.setuptools]
+packages = ["nasa_backend", "nasa_backend.api"]

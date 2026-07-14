@@ -86,6 +86,17 @@ def run_config(mod, cfg):
         }
 
 
+def load_mod():
+    """Namespace with the two entry points the golden harness needs."""
+    from types import SimpleNamespace
+
+    from nasa_backend.pipeline import process_video
+    from nasa_backend.serialization import make_json_serializable
+
+    return SimpleNamespace(process_video=process_video,
+                           make_json_serializable=make_json_serializable)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -100,7 +111,7 @@ def main():
         selected = [c for c in CONFIGS if c["name"] in wanted]
 
     assert os.path.isfile(GOLDEN_VIDEO), f"golden video missing: {GOLDEN_VIDEO}"
-    import frontend_nasa13_apiV2 as mod  # real weights load (run from Nasa_Backend/)
+    mod = load_mod()  # real weights load (run from Nasa_Backend/)
 
     os.makedirs(EXPECTED_DIR, exist_ok=True)
     written = []

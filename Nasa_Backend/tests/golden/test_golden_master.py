@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from tests.golden.record_goldens import CONFIGS, EXPECTED_DIR, GOLDEN_VIDEO, run_config
+from tests.golden.record_goldens import CONFIGS, EXPECTED_DIR, GOLDEN_VIDEO, load_mod, run_config
 
 pytestmark = [pytest.mark.local, pytest.mark.weights, pytest.mark.gpu]
 
@@ -43,7 +43,7 @@ def _first_diff(a, b, path="$"):
      for c in CONFIGS],
     ids=lambda c: c["name"],
 )
-def test_golden_master(app_module, cfg):
+def test_golden_master(cfg):
     if not os.path.isfile(GOLDEN_VIDEO):
         pytest.skip(f"golden video not present: {GOLDEN_VIDEO}")
     expected_path = os.path.join(EXPECTED_DIR, f"{cfg['name']}.json")
@@ -54,6 +54,6 @@ def test_golden_master(app_module, cfg):
         expected = json.load(fh)
     # round-trip current through JSON so 'null', int/float, and key-string
     # semantics match the recorded file exactly
-    current = json.loads(json.dumps(run_config(app_module, cfg), allow_nan=False, sort_keys=True))
+    current = json.loads(json.dumps(run_config(load_mod(), cfg), allow_nan=False, sort_keys=True))
     diff = _first_diff(current, expected)
     assert diff is None, f"golden mismatch [{cfg['name']}]: {diff}"

@@ -2,16 +2,20 @@
 task/queue/worker/SSE machinery runs for real, only the video pipeline is fake.
 Verifies the final SSE payload carries every field the React app reads."""
 import json
+import os
 import time
 
 import numpy as np
 
+from nasa_backend import pipeline
+from nasa_backend.api import routes
 
-def _drain_sse(mod, task_id, deadline_s=10.0):
+
+def _drain_sse(app, task_id, deadline_s=10.0):
     """Collect SSE frames for a task until the closed frame or deadline."""
     frames = []
-    with mod.server.test_request_context(f"/api/events/{task_id}"):
-        gen = mod.api_events(task_id).response
+    with app.test_request_context(f"/api/events/{task_id}"):
+        gen = routes.api_events(task_id).response
         t0 = time.time()
         for frame in gen:
             frames.append(frame)
@@ -29,7 +33,7 @@ def _data_events(frames):
     return out
 
 
-def test_process_full_flow_final_payload(app_module, monkeypatch, tmp_path):
+def test_process_full_flow_final_payload(app, monkeypatch, tmp_path):
     video = tmp_path / "clip.mp4"
     video.write_bytes(b"\x00fake")
     excel = tmp_path / "clip_detection_summary.xlsx"
@@ -53,8 +57,8 @@ def test_process_full_flow_final_payload(app_module, monkeypatch, tmp_path):
                   "donuts": {"water_count": 3, "ice_count": 1, "void_pct_avg": 84.5, "avg_conf": 0.9}}
         return ("✅ Processing complete!", str(excel), rows, overlaps, charts, 1.23, size_dist)
 
-    monkeypatch.setattr(app_module, "process_video", fake_process_video)
-    client = app_module.server.test_client()
+    monkeypatch.setattr(pipeline, "process_video", fake_process_video)
+    client = app.test_client()
     resp = client.post("/api/process", json={
         "video_path": str(video), "save_overlay": False,
         "dist_interval": 5, "output_mode": "basic", "um_per_px": 2.5,
@@ -63,7 +67,7 @@ def test_process_full_flow_final_payload(app_module, monkeypatch, tmp_path):
     body = resp.get_json()
     assert body["status"] == "ok" and body["task_id"]
 
-    events = _data_events(_drain_sse(app_module, body["task_id"]))
+    events = _data_events(_drain_sse(app, body["task_id"]))
 
     # progress event passed through make_json_serializable: NaN -> null
     progress = [e for e in events if e.get("status") == "progress"]
@@ -78,9 +82,13 @@ def test_process_full_flow_final_payload(app_module, monkeypatch, tmp_path):
     assert data["charts"]["donuts"]["water_count"] == 3
     assert data["size_distribution"] == size_dist
     assert data["execution_time"] == 1.23
-    import urllib.parse
-    assert data["download_url"].endswith(
-        "/api/download_summary?path=" + urllib.parse.quote(str(excel)))
+    from nasa_backend.api import tasks as tasks_mod
+    assert "/api/download_summary?id=" in data["download_url"]
+    did = data["download_url"].rsplit("id=", 1)[1]
+    assert tasks_mod.downloads[did] == str(excel)
+    # the served id round-trips to the file
+    dl = app.test_client().get(f"/api/download_summary?id={did}")
+    assert dl.status_code == 200 and dl.data == b"PK\x03\x04fake"
     assert events[-1] == {"status": "closed"}
 
     # api_process parameter parsing reached process_video intact
@@ -88,17 +96,24 @@ def test_process_full_flow_final_payload(app_module, monkeypatch, tmp_path):
                         "dist_interval": 5, "output_mode": "basic", "um_per_px": 2.5}
 
 
-def test_process_validation_errors(app_module):
-    client = app_module.server.test_client()
+def test_process_validation_errors(app, tmp_path):
+    client = app.test_client()
     r1 = client.post("/api/process", json={})
     assert r1.status_code == 400
     assert r1.get_json() == {"status": "error", "message": "Missing video_path"}
+    # Outside the allowlist (conftest pins NASA_VIDEO_ROOTS to pytest's tmp
+    # root): the gate fires before the existence probe, so this is 403 — the
+    # server never stats a path that hasn't cleared the allowlist.
     r2 = client.post("/api/process", json={"video_path": "/nonexistent/x.mp4"})
-    assert r2.status_code == 400
-    assert r2.get_json()["message"].startswith("Path is neither a file nor a directory")
+    assert r2.status_code == 403
+    assert "allowed video directories" in r2.get_json()["message"]
+    # Inside the allowlist but nonexistent: the existence probe still 400s.
+    r3 = client.post("/api/process", json={"video_path": str(tmp_path / "missing.mp4")})
+    assert r3.status_code == 400
+    assert r3.get_json()["message"].startswith("Path is neither a file nor a directory")
 
 
-def test_process_sanitizes_bad_params(app_module, monkeypatch, tmp_path):
+def test_process_sanitizes_bad_params(app, monkeypatch, tmp_path):
     video = tmp_path / "v.mp4"
     video.write_bytes(b"\x00")
     captured = {}
@@ -109,25 +124,119 @@ def test_process_sanitizes_bad_params(app_module, monkeypatch, tmp_path):
                         um_per_px=um_per_px)
         return ("✅ ok", None, None, None, None, 0.1, None)
 
-    monkeypatch.setattr(app_module, "process_video", fake_process_video)
-    client = app_module.server.test_client()
+    monkeypatch.setattr(pipeline, "process_video", fake_process_video)
+    client = app.test_client()
     resp = client.post("/api/process", json={
         "video_path": str(video), "dist_interval": "junk",
         "output_mode": "WEIRD", "um_per_px": -3,
     })
     assert resp.status_code == 202
-    _drain_sse(app_module, resp.get_json()["task_id"])
+    _drain_sse(app, resp.get_json()["task_id"])
     assert captured == {"dist_interval": 0, "output_mode": "full", "um_per_px": None}
 
 
-def test_download_summary(app_module, tmp_path):
+def test_download_summary_serves_only_registered_ids(app, tmp_path):
+    from nasa_backend.api import tasks as tasks_mod
     f = tmp_path / "summary.xlsx"
     f.write_bytes(b"PK\x03\x04data")
-    client = app_module.server.test_client()
-    ok = client.get(f"/api/download_summary?path={f}")
-    assert ok.status_code == 200
-    assert ok.data == b"PK\x03\x04data"
-    bad = client.get("/api/download_summary?path=/nonexistent.xlsx")
-    assert bad.status_code == 400
-    missing = client.get("/api/download_summary")
-    assert missing.status_code == 400
+    client = app.test_client()
+    did = tasks_mod.register_download(str(f))
+    ok = client.get(f"/api/download_summary?id={did}")
+    assert ok.status_code == 200 and ok.data == b"PK\x03\x04data"
+    assert client.get("/api/download_summary?id=deadbeef").status_code == 400
+    assert client.get(f"/api/download_summary?path={f}").status_code == 400  # old contract rejected
+    assert client.get("/api/download_summary").status_code == 400
+
+
+def test_process_rejects_paths_outside_allowed_roots(app, monkeypatch, tmp_path):
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    vid = outside / "v.mp4"
+    vid.write_bytes(b"\x00")
+    monkeypatch.setenv("NASA_VIDEO_ROOTS", str(allowed))
+    r = app.test_client().post("/api/process", json={"video_path": str(vid)})
+    assert r.status_code == 403
+    assert "allowed video directories" in r.get_json()["message"]
+
+
+def test_process_accepts_paths_inside_allowed_roots(app, monkeypatch, tmp_path):
+    from nasa_backend import pipeline
+    vid = tmp_path / "v.mp4"
+    vid.write_bytes(b"\x00")
+    monkeypatch.setenv("NASA_VIDEO_ROOTS", f"/nonexistent-root:{tmp_path}")
+    monkeypatch.setattr(pipeline, "process_video",
+                        lambda *a, **k: ("✅ ok", None, None, None, None, 0.1, None))
+    r = app.test_client().post("/api/process", json={"video_path": str(vid)})
+    assert r.status_code == 202
+
+
+def test_process_freezes_symlink_resolution_at_check_time(app, monkeypatch, tmp_path):
+    from nasa_backend import pipeline
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    vid = real_dir / "v.mp4"
+    vid.write_bytes(b"\x00")
+    link_dir = tmp_path / "link"
+    link_dir.symlink_to(real_dir, target_is_directory=True)
+    monkeypatch.setenv("NASA_VIDEO_ROOTS", str(tmp_path))
+    captured = {}
+
+    def fake_process_video(video_path, *a, **k):
+        captured["path"] = video_path
+        return ("✅ ok", None, None, None, None, 0.1, None)
+
+    monkeypatch.setattr(pipeline, "process_video", fake_process_video)
+    r = app.test_client().post("/api/process", json={"video_path": str(link_dir / "v.mp4")})
+    assert r.status_code == 202
+    for _ in range(150):
+        if "path" in captured:
+            break
+        time.sleep(0.1)
+    assert captured["path"] == os.path.realpath(str(link_dir / "v.mp4"))
+    assert "/link/" not in captured["path"]
+
+
+def test_batch_mode_empty_dir_emits_single_error_event(app, monkeypatch, tmp_path):
+    """An allowed directory with no videos must produce exactly ONE error
+    event (not the same error enqueued twice) and still close the stream."""
+    empty = tmp_path / "empty_batch"
+    empty.mkdir()
+    monkeypatch.setenv("NASA_VIDEO_ROOTS", str(empty))
+    r = app.test_client().post("/api/process", json={"video_path": str(empty)})
+    assert r.status_code == 202
+    events = _data_events(_drain_sse(app, r.get_json()["task_id"]))
+    errors = [e for e in events if e.get("status") == "error"]
+    assert len(errors) == 1, f"expected one error event, got: {errors!r}"
+    assert "No video files found in directory" in errors[0]["message"]
+    assert events[-1] == {"status": "closed"}
+
+
+def test_batch_mode_skips_escapes_and_freezes_entries(app, monkeypatch, tmp_path):
+    from nasa_backend import pipeline
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (allowed / "in.mp4").write_bytes(b"\x00")
+    (allowed / "alias.mp4").symlink_to(allowed / "in.mp4")
+    (outside / "secret.mp4").write_bytes(b"\x00")
+    (allowed / "escape.mp4").symlink_to(outside / "secret.mp4")
+    monkeypatch.setenv("NASA_VIDEO_ROOTS", str(allowed))
+    processed = []
+
+    def fake_process_video(video_path, *a, **k):
+        processed.append(video_path)
+        return ("✅ ok", None, None, None, None, 0.1, None)
+
+    monkeypatch.setattr(pipeline, "process_video", fake_process_video)
+    r = app.test_client().post("/api/process", json={"video_path": str(allowed)})
+    assert r.status_code == 202
+    for _ in range(150):
+        if len(processed) == 2:
+            break
+        time.sleep(0.1)
+    time.sleep(0.5)  # settle: allow the worker's final queue puts to land
+    expected = os.path.realpath(str(allowed / "in.mp4"))
+    assert processed == [expected, expected]
