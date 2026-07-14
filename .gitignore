@@ -179,3 +179,5 @@ __pycache__/
 CLAUDE.md
 CLAUDE.local.md
 .claude/
+# box-local deploy settings
+deploy/.env

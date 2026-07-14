@@ -1,0 +1,30 @@
+# Lab-box deployment. Box-local settings live in deploy/.env (see .env.example).
+# Design (phase-0 spec §8): weights/videos are volume mounts, never image
+# content; VIDEO_ROOT is mounted at the IDENTICAL container path so paths
+# pasted into the UI keep working and outputs land next to inputs on the host.
+services:
+  app:
+    image: ghcr.io/koncordantlab/water-droplet-segmentation:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    # tini as PID 1 forwards SIGTERM, so stop/down terminates promptly instead
+    # of burning the 10 s grace period into a SIGKILL mid-write.
+    init: true
+    gpus: all
+    # Run as the lab user so outputs on the mounts are user-owned, not root's.
+    user: "${DEPLOY_UID:?set DEPLOY_UID in deploy/.env (id -u)}:${DEPLOY_GID:?set DEPLOY_GID in deploy/.env (id -g)}"
+    ports:
+      # localhost-only, matching the venv deploy's DROPLET_HOST default;
+      # reach it from other machines via SSH tunnel, or change the bind here.
+      - "127.0.0.1:8050:8050"
+    environment:
+      DROPLET_WEIGHTS_PATH: /weights/model.pt
+      DROPLET_VIDEO_ROOTS: ${VIDEO_ROOT:?set VIDEO_ROOT in deploy/.env}
+    volumes:
+      - ${WEIGHTS_FILE:?set WEIGHTS_FILE in deploy/.env}:/weights/model.pt:ro
+      - ${VIDEO_ROOT}:${VIDEO_ROOT}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8050/api/status', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
