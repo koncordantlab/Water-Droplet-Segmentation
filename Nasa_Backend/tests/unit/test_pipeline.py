@@ -3,7 +3,6 @@
 model — no weights, no GPU. Pins checkpoint selection (N, 2N, ..., final),
 the seven avg-size headers byte-identical across Per-Frame and Summary
 sheets, and the size_distribution payload shape."""
-import math
 import os
 
 import cv2

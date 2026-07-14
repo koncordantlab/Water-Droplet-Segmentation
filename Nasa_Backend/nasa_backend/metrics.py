@@ -2,8 +2,6 @@
 """Per-instance and average droplet-size metrics. The seven avg-size summary
 columns and the per-instance xlsx column set derive from these helpers —
 header strings and NaN-when-no-scale semantics are golden-pinned."""
-import math
-
 import cv2
 import numpy as np
 

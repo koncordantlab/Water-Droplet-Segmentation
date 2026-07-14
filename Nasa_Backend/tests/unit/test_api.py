@@ -142,9 +142,12 @@ def test_download_summary_serves_only_registered_ids(app, tmp_path):
 
 
 def test_process_rejects_paths_outside_allowed_roots(app, monkeypatch, tmp_path):
-    allowed = tmp_path / "allowed"; allowed.mkdir()
-    outside = tmp_path / "outside"; outside.mkdir()
-    vid = outside / "v.mp4"; vid.write_bytes(b"\x00")
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    vid = outside / "v.mp4"
+    vid.write_bytes(b"\x00")
     monkeypatch.setenv("NASA_VIDEO_ROOTS", str(allowed))
     r = app.test_client().post("/api/process", json={"video_path": str(vid)})
     assert r.status_code == 403
@@ -153,7 +156,8 @@ def test_process_rejects_paths_outside_allowed_roots(app, monkeypatch, tmp_path)
 
 def test_process_accepts_paths_inside_allowed_roots(app, monkeypatch, tmp_path):
     from nasa_backend import pipeline
-    vid = tmp_path / "v.mp4"; vid.write_bytes(b"\x00")
+    vid = tmp_path / "v.mp4"
+    vid.write_bytes(b"\x00")
     monkeypatch.setenv("NASA_VIDEO_ROOTS", f"/nonexistent-root:{tmp_path}")
     monkeypatch.setattr(pipeline, "process_video",
                         lambda *a, **k: ("✅ ok", None, None, None, None, 0.1, None))
@@ -163,8 +167,10 @@ def test_process_accepts_paths_inside_allowed_roots(app, monkeypatch, tmp_path):
 
 def test_process_freezes_symlink_resolution_at_check_time(app, monkeypatch, tmp_path):
     from nasa_backend import pipeline
-    real_dir = tmp_path / "real"; real_dir.mkdir()
-    vid = real_dir / "v.mp4"; vid.write_bytes(b"\x00")
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    vid = real_dir / "v.mp4"
+    vid.write_bytes(b"\x00")
     link_dir = tmp_path / "link"
     link_dir.symlink_to(real_dir, target_is_directory=True)
     monkeypatch.setenv("NASA_VIDEO_ROOTS", str(tmp_path))
@@ -187,8 +193,10 @@ def test_process_freezes_symlink_resolution_at_check_time(app, monkeypatch, tmp_
 
 def test_batch_mode_skips_escapes_and_freezes_entries(app, monkeypatch, tmp_path):
     from nasa_backend import pipeline
-    allowed = tmp_path / "allowed"; allowed.mkdir()
-    outside = tmp_path / "outside"; outside.mkdir()
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
     (allowed / "in.mp4").write_bytes(b"\x00")
     (allowed / "alias.mp4").symlink_to(allowed / "in.mp4")
     (outside / "secret.mp4").write_bytes(b"\x00")

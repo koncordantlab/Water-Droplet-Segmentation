@@ -49,18 +49,24 @@ def apply_full_overlay(img, masks_np, class_names, mask_thresh=0.3, full_masks=N
         full_masks = [cv2.resize((m > mask_thresh).astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) for m in masks_np]
     water_union, ice_union = np.zeros((h, w), dtype=np.uint8), np.zeros((h, w), dtype=np.uint8)
     for fm, cls in zip(full_masks, class_names):
-        if cls == "water": water_union |= fm
-        elif cls == "ice": ice_union |= fm
+        if cls == "water":
+            water_union |= fm
+        elif cls == "ice":
+            ice_union |= fm
     ww_mask, ii_mask, wi_mask = np.zeros((h, w), dtype=np.uint8), np.zeros((h, w), dtype=np.uint8), np.zeros((h, w), dtype=np.uint8)
     n = len(full_masks)
     for i in range(n):
         for j in range(i+1, n):
             inter = full_masks[i] & full_masks[j]
-            if not np.any(inter): continue
+            if not np.any(inter):
+                continue
             ni, nj = class_names[i], class_names[j]
-            if ni == nj == "water": ww_mask |= inter
-            elif ni == nj == "ice": ii_mask |= inter
-            else: wi_mask |= inter
+            if ni == nj == "water":
+                ww_mask |= inter
+            elif ni == nj == "ice":
+                ii_mask |= inter
+            else:
+                wi_mask |= inter
     base = img.astype(float)
     base = blend_mask(base, water_union, COLOR_MAP["water"], ALPHA_SEG)
     base = blend_mask(base, ice_union, COLOR_MAP["ice"], ALPHA_SEG)
