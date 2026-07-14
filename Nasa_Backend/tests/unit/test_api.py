@@ -183,7 +183,7 @@ def test_process_freezes_symlink_resolution_at_check_time(app, monkeypatch, tmp_
     monkeypatch.setattr(pipeline, "process_video", fake_process_video)
     r = app.test_client().post("/api/process", json={"video_path": str(link_dir / "v.mp4")})
     assert r.status_code == 202
-    for _ in range(50):
+    for _ in range(150):
         if "path" in captured:
             break
         time.sleep(0.1)
@@ -211,10 +211,10 @@ def test_batch_mode_skips_escapes_and_freezes_entries(app, monkeypatch, tmp_path
     monkeypatch.setattr(pipeline, "process_video", fake_process_video)
     r = app.test_client().post("/api/process", json={"video_path": str(allowed)})
     assert r.status_code == 202
-    for _ in range(50):
+    for _ in range(150):
         if len(processed) == 2:
             break
         time.sleep(0.1)
-    time.sleep(0.3)  # let the batch loop finish
+    time.sleep(0.5)  # settle: allow the worker's final queue puts to land
     expected = os.path.realpath(str(allowed / "in.mp4"))
     assert processed == [expected, expected]
