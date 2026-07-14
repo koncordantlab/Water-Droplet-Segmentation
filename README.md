@@ -2,7 +2,42 @@
 
 This repository contains the full stack Water Droplet project. It includes a Python backend (a Flask server, the `droplet_backend` package) in `backend/` and a React frontend in `frontend/`.
 
-## Running the backend
+There are two ways to run it: **Docker** (recommended — one container serving both the UI and the API, no Python or npm setup on the host) or the **manual development setup** (backend from source, frontend built or on its own dev server).
+
+## Running with Docker (recommended)
+
+Merging to `main` builds and publishes `ghcr.io/koncordantlab/water-droplet-segmentation`
+(`:latest` + a per-merge `:sha-<short>`) via `.github/workflows/release.yml`.
+The image contains the API, the built React UI, and CUDA torch — **never the
+weights or any videos** (`.dockerignore` enforces this; they are volume mounts).
+
+One-time host prerequisites: Docker with the NVIDIA Container Toolkit
+(`nvidia-ctk runtime configure --runtime=docker`).
+
+First deploy on the box, in order:
+
+1. Free port 8050 — stop any manually run `python -m droplet_backend` still running.
+2. `cp deploy/.env.example deploy/.env` and fill in the box's paths and uid/gid.
+3. Make the GHCR package public in its settings — or `docker login ghcr.io` with a `read:packages` token.
+4. `deploy/update.sh` — pulls `:latest`, starts the stack, and waits for it to report healthy.
+5. `deploy/validate.sh latest` — runs the golden-master + GPU bit-exactness suites (including the ~10-min full-mode golden) inside the container. Run it from a checkout at the commit the image was built from: the gate exercises the checkout's code under the image's runtime.
+6. Rollback drill: set `IMAGE_TAG=sha-<short>` (the first release's tag) in `deploy/.env`, re-run `deploy/update.sh`, then set it back to `latest`.
+
+After that, deploying a merge is just `deploy/update.sh`; rolling back is setting
+`IMAGE_TAG=sha-<short>` in `deploy/.env` and re-running it.
+
+The app serves on `127.0.0.1:8050` (UI at `/`, API under `/api/*`). Videos are
+readable from `VIDEO_ROOT` (mounted at its identical host path, so paths pasted
+into the UI keep working and outputs land next to inputs, exactly like a manual
+run).
+
+## Running manually (development setup)
+
+The from-source setup for development: the backend runs from a Python
+environment, and the React UI is either built once and served by the backend or
+run on its own hot-reload dev server.
+
+### Backend
 
 1. Change to the backend folder:
 ```bash
@@ -48,6 +83,38 @@ All environment variables are optional (defaults shown):
 | `DROPLET_VIDEO_ROOTS` | the invoking user's home directory | Colon-separated allowlist of directories `/api/process` may read `video_path` from; a path outside every root (after resolving symlinks) is rejected with `403`. |
 | `DROPLET_CORS_ORIGINS` | `http://localhost:3000` | Comma-separated origins allowed to call `/api/*` with credentials. A literal `*` makes the server refuse to start, since reflected origins plus credentials would defeat the check. |
 
+### Frontend
+
+Install packages first:
+
+```bash
+cd frontend
+npm install
+```
+
+Then pick one of two modes:
+
+**Build once, served by the backend** (mirrors the Docker deployment — no configuration needed, the frontend's default relative `/api` base works same-origin):
+
+```bash
+npm run build
+```
+
+The backend auto-detects `frontend/build/` and serves the UI at http://localhost:8050/.
+
+**Hot-reload dev server** (for UI work). It runs on its own port, so it needs a `.env` in `frontend/` pointing at the backend:
+
+```
+# frontend/.env
+REACT_APP_BACKEND_API_URL=http://localhost:8050/api
+```
+
+```bash
+npm start
+```
+
+This opens the React app on http://localhost:3000, calling the backend at the URL from `.env`.
+
 ## Running backend tests
 
 From `backend/`, using the project's Python environment:
@@ -60,60 +127,7 @@ python -m pytest -m "local and slow"      # full-mode golden (~10 min); run befo
 
 Tier 1 exercises the pure-Python/numpy modules plus the API/SSE contract against a fake model (no weights or GPU). Tier 2 loads the real weights and runs the two fast basic-mode golden masters; the `slow` marker adds the full-mode golden. Golden masters live in `backend/tests/golden/expected/*.json` — re-record them with `python tests/golden/record_goldens.py` only when a numeric change is intended and reviewed.
 
-## Deployment (Docker)
-
-Merging to `main` builds and publishes `ghcr.io/koncordantlab/water-droplet-segmentation`
-(`:latest` + a per-merge `:sha-<short>`) via `.github/workflows/release.yml`.
-The image contains the API, the built React UI, and CUDA torch — **never the
-weights or any videos** (`.dockerignore` enforces this; they are volume mounts).
-
-One-time host prerequisites: Docker with the NVIDIA Container Toolkit
-(`nvidia-ctk runtime configure --runtime=docker`).
-
-First deploy on the box, in order:
-
-1. Free port 8050 — stop any venv-era `python -m droplet_backend` still running.
-2. `cp deploy/.env.example deploy/.env` and fill in the box's paths and uid/gid.
-3. Make the GHCR package public in its settings — or `docker login ghcr.io` with a `read:packages` token.
-4. `deploy/update.sh` — pulls `:latest`, starts the stack, and waits for it to report healthy.
-5. `deploy/validate.sh latest` — runs the golden-master + GPU bit-exactness suites (including the ~10-min full-mode golden) inside the container. Run it from a checkout at the commit the image was built from: the gate exercises the checkout's code under the image's runtime.
-6. Rollback drill: set `IMAGE_TAG=sha-<short>` (the first release's tag) in `deploy/.env`, re-run `deploy/update.sh`, then set it back to `latest`.
-
-After that, deploying a merge is just `deploy/update.sh`; rolling back is setting
-`IMAGE_TAG=sha-<short>` in `deploy/.env` and re-running it.
-
-The app serves on `127.0.0.1:8050` (UI at `/`, API under `/api/*`). Videos are
-readable from `VIDEO_ROOT` (mounted at its identical host path, so paths pasted
-into the UI keep working and outputs land next to inputs, exactly like a venv
-run).
-
-## Running the frontend
-
-1. Change to the frontend folder and install packages:
-
-```bash
-cd frontend
-npm install
-```
-
-2. Configure the frontend environment so it can reach the backend server running on port 8050.
-
-Create a `.env` file in `frontend/` (example):
-
-```
-# Example `frontend/.env` content
-REACT_APP_BACKEND_API_URL=http://localhost:8050/api
-```
-
-Make sure the frontend reads `REACT_APP_BACKEND_API_URL`. If your backend is on a different host or port, update the URL accordingly.
-
-3. Start the frontend dev server:
-
-```bash
-npm start
-```
-
-This should open the React app (usually at http://localhost:3000). The frontend will call the backend at the URL you set in `.env`.
+Run the tier-2/golden suites (and `deploy/validate.sh`) on an **idle GPU**: concurrent training or other GPU jobs on the same machine make inference nondeterministic under load, so golden comparisons can flake even when the code is correct. If a golden fails, check `nvidia-smi` for other GPU processes before suspecting a regression.
 
 ## Development instructions & best practices
 
