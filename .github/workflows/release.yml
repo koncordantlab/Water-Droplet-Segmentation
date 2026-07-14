@@ -31,7 +31,9 @@ jobs:
           # lowercase is mandatory for GHCR; repo display name is mixed-case
           images: ghcr.io/koncordantlab/water-droplet-segmentation
           tags: |
-            type=raw,value=latest
+            # latest only from main: a manual dispatch on another ref must not
+            # repoint the tag the deploy box pulls
+            type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-
       - uses: docker/build-push-action@v6
         with:
