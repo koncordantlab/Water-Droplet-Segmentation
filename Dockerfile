@@ -24,6 +24,9 @@ RUN pip install --no-cache-dir torch==2.9.0 torchvision==0.24.0 \
     && pip install --no-cache-dir -r requirements.txt
 COPY backend/droplet_backend/ ./droplet_backend/
 COPY --from=webui /frontend/build/ ./droplet_backend/webui/
+# Pre-create the config dirs the ENV block points at (any-uid writable);
+# without them ultralytics falls back to another path with a startup warning.
+RUN mkdir -m 1777 -p /tmp/mpl /tmp/ultralytics
 # 0.0.0.0: the container port is published (host-side binding decides exposure).
 # MPLCONFIGDIR/YOLO_CONFIG_DIR: writable under any --user uid (compose runs the
 # container as the invoking lab user so outputs land user-owned on the mounts).

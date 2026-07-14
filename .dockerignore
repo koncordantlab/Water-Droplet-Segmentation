@@ -20,6 +20,7 @@ deploy/
 CLAUDE.md
 CLAUDE.local.md
 .claude/
+.superpowers/
 **/__pycache__/
 **/.pytest_cache/
 **/.DS_Store
