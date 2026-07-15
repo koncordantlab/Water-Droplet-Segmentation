@@ -129,18 +129,27 @@ Tier 1 exercises the pure-Python/numpy modules plus the API/SSE contract against
 
 Run the tier-2/golden suites (and `deploy/validate.sh`) on an **idle GPU**: concurrent training or other GPU jobs on the same machine make inference nondeterministic under load, so golden comparisons can flake even when the code is correct. If a golden fails, check `nvidia-smi` for other GPU processes before suspecting a regression.
 
-## Development instructions & best practices
+## Tracking pipeline
 
-- Do NOT commit large generated results such as Excel summaries, segmentation videos, model weight checkpoints, or large dataset files. Keep these local or store them in an external storage bucket if needed.
-- Work on a feature branch and not in the "main" branch. And make pull request to be reviewed by your peers before merging.
-- When adding files to commit, select only the files you intend to push. Avoid using:
+Standalone research tooling (separate from the served app) in `backend/tracking/`:
+a two-phase pipeline — YOLO detection once into `detections.json`, then a custom
+tracker (with merge detection) into `tracking_log.json` + an annotated video —
+plus analysis/plotting consumers. Run from `backend/`:
 
 ```bash
-# DO NOT run
-git add .
+python -m tracking all                      # detect + track with the config.py defaults
+python -m tracking detect --video V --detections D
+python -m tracking track  --video V --detections D --output OUT.mp4 --log LOG.json
+python -m tracking analyze --detections D --tracking-log LOG.json   # insights JSON + CSVs
+python -m tracking plots   --tracking-log LOG.json   # timeline plots
 ```
 
-Instead, add specific files or directories explicitly, for example:
+Tuning lives in `backend/tracking/config.py` (~110 documented tuning constants) —
+prefer adjusting constants over editing the matchers, which are heavily
+interdependent. Uses `weights_DP(6).pt` on purpose (the thresholds were tuned
+against it). The Docker image does not include this package.
+
+## Contributing
 
 The development workflow, testing requirements, and never-commit rules live in
 [CONTRIBUTING.md](CONTRIBUTING.md). Highlights: branch off `main` with
