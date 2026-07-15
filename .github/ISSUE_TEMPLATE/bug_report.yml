@@ -1,0 +1,43 @@
+name: Bug report
+description: Something is broken or producing wrong results
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: dropdown
+    id: context
+    attributes:
+      label: How was it running?
+      options:
+        - Docker deploy (deploy/update.sh)
+        - Manual backend (python -m droplet_backend)
+        - Frontend dev server (npm start)
+        - Tracking pipeline (python -m tracking)
+        - Tests (pytest)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Image tag (e.g. `sha-abc1234`) or commit (`git rev-parse --short HEAD`).
+  - type: textarea
+    id: inputs
+    attributes:
+      label: Processing inputs (for wrong-results bugs)
+      description: >-
+        Video characteristics (resolution / fps / duration), settings
+        (um_per_px, dist_interval, output mode), and whether other GPU jobs
+        were running at the time — concurrent GPU load makes inference
+        nondeterministic and can make golden/tier-2 tests flake.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / output
+      description: Server console output, tracebacks, or the SSE error frame.
+      render: shell
