@@ -1,6 +1,8 @@
 """python -m tracking -- CLI over the two-phase pipeline. Mirrors the old
 monolith __main__ flow; every path defaults to tracking.config and is
-overridable per invocation."""
+overridable per invocation. The analyze/plots subcommands forward their
+remaining argv to those modules' own argparse (add_help=False keeps --help
+forwarding too); detect/track/all reject unknown extras like before."""
 import argparse
 
 from tracking import config
@@ -30,7 +32,26 @@ def main():
     p.add_argument("--output", default=config.OUTPUT_PATH)
     p.add_argument("--log", default=config.TRACK_LOG_PATH)
 
-    args = parser.parse_args()
+    p = sub.add_parser("analyze", add_help=False,
+                       help="insights_summary.json + CSVs from a tracking log")
+    p = sub.add_parser("plots", add_help=False,
+                       help="timeline plots from a tracking log")
+
+    args, extra = parser.parse_known_args()
+    if args.cmd in ("detect", "track", "all") and extra:
+        parser.error(f"unrecognized arguments: {' '.join(extra)}")
+    if args.cmd == "analyze":
+        import sys
+        from tracking import analyze
+        sys.argv = ["tracking analyze", *extra]
+        analyze.main()
+        return
+    if args.cmd == "plots":
+        import sys
+        from tracking import plots
+        sys.argv = ["tracking plots", *extra]
+        plots.main()
+        return
     if args.cmd in ("detect", "all"):
         from tracking.detect import export_detections_json, load_model
         print("Loading YOLO model...")
