@@ -1,0 +1,515 @@
+[
+  {
+    "frame": 1,
+    "detections": [
+      {
+        "det_id": 0,
+        "center": [
+          290.0,
+          310.0
+        ],
+        "area": 400.0,
+        "segment": [
+          [
+            280.0,
+            300.0
+          ],
+          [
+            300.0,
+            300.0
+          ],
+          [
+            300.0,
+            320.0
+          ],
+          [
+            280.0,
+            320.0
+          ]
+        ],
+        "conf": 0.9,
+        "cls": 0
+      },
+      {
+        "det_id": 1,
+        "center": [
+          350.0,
+          310.0
+        ],
+        "area": 400.0,
+        "segment": [
+          [
+            340.0,
+            300.0
+          ],
+          [
+            360.0,
+            300.0
+          ],
+          [
+            360.0,
+            320.0
+          ],
+          [
+            340.0,
+            320.0
+          ]
+        ],
+        "conf": 0.9,
+        "cls": 0
+      }
+    ],
+    "tracks": [
+      {
+        "track_id": 1,
+        "gen": 1,
+        "center": [
+          290.0,
+          310.0
+        ],
+        "area": 400.0,
+        "missed": 0,
+        "merge_candidate_streak": 0,
+        "merge_candidate_score": 0.0,
+        "last_merge_candidate_frame": 0,
+        "merge_candidate_peak_area_ratio": 0.0,
+        "status": "active",
+        "segment": [
+          [
+            280.0,
+            300.0
+          ],
+          [
+            300.0,
+            300.0
+          ],
+          [
+            300.0,
+            320.0
+          ],
+          [
+            280.0,
+            320.0
+          ]
+        ]
+      },
+      {
+        "track_id": 2,
+        "gen": 1,
+        "center": [
+          350.0,
+          310.0
+        ],
+        "area": 400.0,
+        "missed": 0,
+        "merge_candidate_streak": 0,
+        "merge_candidate_score": 0.0,
+        "last_merge_candidate_frame": 0,
+        "merge_candidate_peak_area_ratio": 0.0,
+        "status": "active",
+        "segment": [
+          [
+            340.0,
+            300.0
+          ],
+          [
+            360.0,
+            300.0
+          ],
+          [
+            360.0,
+            320.0
+          ],
+          [
+            340.0,
+            320.0
+          ]
+        ]
+      }
+    ],
+    "events": [
+      {
+        "type": "birth",
+        "track_id": 1,
+        "gen": 1,
+        "det_id": 0
+      },
+      {
+        "type": "birth",
+        "track_id": 2,
+        "gen": 1,
+        "det_id": 1
+      }
+    ]
+  },
+  {
+    "frame": 2,
+    "detections": [
+      {
+        "det_id": 0,
+        "center": [
+          296.0,
+          310.0
+        ],
+        "area": 400.0,
+        "segment": [
+          [
+            286.0,
+            300.0
+          ],
+          [
+            306.0,
+            300.0
+          ],
+          [
+            306.0,
+            320.0
+          ],
+          [
+            286.0,
+            320.0
+          ]
+        ],
+        "conf": 0.9,
+        "cls": 0
+      },
+      {
+        "det_id": 1,
+        "center": [
+          344.0,
+          310.0
+        ],
+        "area": 400.0,
+        "segment": [
+          [
+            334.0,
+            300.0
+          ],
+          [
+            354.0,
+            300.0
+          ],
+          [
+            354.0,
+            320.0
+          ],
+          [
+            334.0,
+            320.0
+          ]
+        ],
+        "conf": 0.9,
+        "cls": 0
+      }
+    ],
+    "tracks": [
+      {
+        "track_id": 1,
+        "gen": 1,
+        "center": [
+          296.0,
+          310.0
+        ],
+        "area": 400.0,
+        "missed": 0,
+        "merge_candidate_streak": 0,
+        "merge_candidate_score": 0.0,
+        "last_merge_candidate_frame": 0,
+        "merge_candidate_peak_area_ratio": 0.0,
+        "status": "active",
+        "segment": [
+          [
+            286.0,
+            300.0
+          ],
+          [
+            306.0,
+            300.0
+          ],
+          [
+            306.0,
+            320.0
+          ],
+          [
+            286.0,
+            320.0
+          ]
+        ]
+      },
+      {
+        "track_id": 2,
+        "gen": 1,
+        "center": [
+          344.0,
+          310.0
+        ],
+        "area": 400.0,
+        "missed": 0,
+        "merge_candidate_streak": 0,
+        "merge_candidate_score": 0.0,
+        "last_merge_candidate_frame": 0,
+        "merge_candidate_peak_area_ratio": 0.0,
+        "status": "active",
+        "segment": [
+          [
+            334.0,
+            300.0
+          ],
+          [
+            354.0,
+            300.0
+          ],
+          [
+            354.0,
+            320.0
+          ],
+          [
+            334.0,
+            320.0
+          ]
+        ]
+      }
+    ],
+    "events": [
+      {
+        "type": "match",
+        "track_id": 2,
+        "det_id": 1,
+        "iou": 0.5555555555555556,
+        "dist_norm": 0.30000001192092896
+      },
+      {
+        "type": "match",
+        "track_id": 1,
+        "det_id": 0,
+        "iou": 0.5555555555555556,
+        "dist_norm": 0.30000001192092896
+      }
+    ]
+  },
+  {
+    "frame": 3,
+    "detections": [
+      {
+        "det_id": 0,
+        "center": [
+          302.0,
+          310.0
+        ],
+        "area": 400.0,
+        "segment": [
+          [
+            292.0,
+            300.0
+          ],
+          [
+            312.0,
+            300.0
+          ],
+          [
+            312.0,
+            320.0
+          ],
+          [
+            292.0,
+            320.0
+          ]
+        ],
+        "conf": 0.9,
+        "cls": 0
+      },
+      {
+        "det_id": 1,
+        "center": [
+          338.0,
+          310.0
+        ],
+        "area": 400.0,
+        "segment": [
+          [
+            328.0,
+            300.0
+          ],
+          [
+            348.0,
+            300.0
+          ],
+          [
+            348.0,
+            320.0
+          ],
+          [
+            328.0,
+            320.0
+          ]
+        ],
+        "conf": 0.9,
+        "cls": 0
+      }
+    ],
+    "tracks": [
+      {
+        "track_id": 1,
+        "gen": 1,
+        "center": [
+          302.0,
+          310.0
+        ],
+        "area": 400.0,
+        "missed": 0,
+        "merge_candidate_streak": 0,
+        "merge_candidate_score": 0.0,
+        "last_merge_candidate_frame": 0,
+        "merge_candidate_peak_area_ratio": 0.0,
+        "status": "active",
+        "segment": [
+          [
+            292.0,
+            300.0
+          ],
+          [
+            312.0,
+            300.0
+          ],
+          [
+            312.0,
+            320.0
+          ],
+          [
+            292.0,
+            320.0
+          ]
+        ]
+      },
+      {
+        "track_id": 2,
+        "gen": 1,
+        "center": [
+          338.0,
+          310.0
+        ],
+        "area": 400.0,
+        "missed": 0,
+        "merge_candidate_streak": 0,
+        "merge_candidate_score": 0.0,
+        "last_merge_candidate_frame": 0,
+        "merge_candidate_peak_area_ratio": 0.0,
+        "status": "active",
+        "segment": [
+          [
+            328.0,
+            300.0
+          ],
+          [
+            348.0,
+            300.0
+          ],
+          [
+            348.0,
+            320.0
+          ],
+          [
+            328.0,
+            320.0
+          ]
+        ]
+      }
+    ],
+    "events": [
+      {
+        "type": "match",
+        "track_id": 2,
+        "det_id": 1,
+        "iou": 0.5555555555555556,
+        "dist_norm": 0.30000001192092896
+      },
+      {
+        "type": "match",
+        "track_id": 1,
+        "det_id": 0,
+        "iou": 0.5555555555555556,
+        "dist_norm": 0.30000001192092896
+      }
+    ]
+  },
+  {
+    "frame": 4,
+    "detections": [
+      {
+        "det_id": 0,
+        "center": [
+          320.0,
+          310.0
+        ],
+        "area": 1120.0,
+        "segment": [
+          [
+            292.0,
+            300.0
+          ],
+          [
+            348.0,
+            300.0
+          ],
+          [
+            348.0,
+            320.0
+          ],
+          [
+            292.0,
+            320.0
+          ]
+        ],
+        "conf": 0.9,
+        "cls": 0
+      }
+    ],
+    "tracks": [
+      {
+        "track_id": 3,
+        "gen": 2,
+        "center": [
+          320.0,
+          310.0
+        ],
+        "area": 1120.0,
+        "missed": 0,
+        "merge_candidate_streak": 0,
+        "merge_candidate_score": 0.0,
+        "last_merge_candidate_frame": 0,
+        "merge_candidate_peak_area_ratio": 0.0,
+        "status": "active",
+        "segment": [
+          [
+            292.0,
+            300.0
+          ],
+          [
+            348.0,
+            300.0
+          ],
+          [
+            348.0,
+            320.0
+          ],
+          [
+            292.0,
+            320.0
+          ]
+        ]
+      }
+    ],
+    "events": [
+      {
+        "type": "merge",
+        "track_id": 3,
+        "gen": 2,
+        "parents": [
+          1,
+          2
+        ],
+        "det_id": 0
+      }
+    ]
+  }
+]
