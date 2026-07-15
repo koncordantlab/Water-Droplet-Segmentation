@@ -1,6 +1,6 @@
 # Contributing
 
-This is a small research-lab repository; these rules keep changes reviewable
+This is a research-lab repository; these rules keep changes reviewable
 and keep large artifacts out of git.
 
 ## Workflow
