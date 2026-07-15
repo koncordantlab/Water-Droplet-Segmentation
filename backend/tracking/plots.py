@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Generate timeline tables and plots from tracking insights JSON outputs.
-Verbatim from plot_tracking_insights.py; only this docstring differs. The
-argparse defaults still assume the old sibling-directory cwd, so pass
---tracking-log / --insights-summary / --out-dir explicitly.
+Verbatim from plot_tracking_insights.py; only this docstring and the argparse
+default paths (re-anchored to backend/output/, like config.py) differ.
 
 Usage:
-  python -m tracking plots --tracking-log ... --insights-summary ... --out-dir ...
+  python -m tracking plots
+  python -m tracking plots --help
 """
 
 from __future__ import annotations
@@ -25,22 +25,24 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import BoundaryNorm, ListedColormap
 import numpy as np
 
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Create per-track timelines and diagnostic plots.")
     parser.add_argument(
         "--tracking-log",
-        default="../Nasa_Backend/output/tracking_log.json",
+        default=os.path.join(_BACKEND_DIR, "output", "tracking_log.json"),
         help="Path to tracking_log.json",
     )
     parser.add_argument(
         "--insights-summary",
-        default="../Nasa_Backend/output/insights_summary.json",
+        default=os.path.join(_BACKEND_DIR, "output", "insights_summary.json"),
         help="Path to insights_summary.json from analyze_tracking_json.py",
     )
     parser.add_argument(
         "--out-dir",
-        default="../Nasa_Backend/output/insights_visual",
+        default=os.path.join(_BACKEND_DIR, "output", "insights_visual"),
         help="Directory for CSV outputs and plots",
     )
     parser.add_argument(
