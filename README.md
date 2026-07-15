@@ -129,32 +129,10 @@ Tier 1 exercises the pure-Python/numpy modules plus the API/SSE contract against
 
 Run the tier-2/golden suites (and `deploy/validate.sh`) on an **idle GPU**: concurrent training or other GPU jobs on the same machine make inference nondeterministic under load, so golden comparisons can flake even when the code is correct. If a golden fails, check `nvidia-smi` for other GPU processes before suspecting a regression.
 
-## Development instructions & best practices
+## Contributing
 
-- Do NOT commit large generated results such as Excel summaries, segmentation videos, model weight checkpoints, or large dataset files. Keep these local or store them in an external storage bucket if needed.
-- Work on a feature branch and not in the "main" branch. And make pull request to be reviewed by your peers before merging.
-- When adding files to commit, select only the files you intend to push. Avoid using:
-
-```bash
-# DO NOT run
-git add .
-```
-
-Instead, add specific files or directories explicitly, for example:
-
-```bash
-git add frontend/src/components/MyComponent.js
-git add backend/droplet_backend/api/routes.py
-```
-
-- Useful git workflow tips:
-	- Use `git status` to review changed files before adding.
-	- Use `git add -p` to stage hunks interactively when appropriate.
-	- If you accidentally staged large files, use `git reset <file>` to unstage them before committing.
-
-## Files/paths you should NOT push
-
-- Any generated segmentation videos or exports (e.g., `segmentation results/`)
-- Local environment folders and virtualenvs (`.venv/`, `venv/`, `env/`)
-
-Add appropriate patterns to your `.gitignore` to keep these out of the repo (if not already present).
+The development workflow, testing requirements, and never-commit rules live in
+[CONTRIBUTING.md](CONTRIBUTING.md). Highlights: branch off `main` with
+peer-reviewed PRs; tier-2 tests required before opening any PR; stage files
+explicitly (never `git add .`); no weights, videos, or generated artifacts in
+git.
