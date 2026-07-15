@@ -140,7 +140,7 @@ plus analysis/plotting consumers. Run from `backend/`:
 python -m tracking all                      # detect + track with the config.py defaults
 python -m tracking detect --video V --detections D
 python -m tracking track  --video V --detections D --output OUT.mp4 --log LOG.json
-python -m tracking analyze --tracking-log LOG.json   # insights JSON + CSVs
+python -m tracking analyze --detections D --tracking-log LOG.json   # insights JSON + CSVs
 python -m tracking plots   --tracking-log LOG.json   # timeline plots
 ```
 

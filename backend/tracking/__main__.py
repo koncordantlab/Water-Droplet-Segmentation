@@ -38,6 +38,8 @@ def main():
                        help="timeline plots from a tracking log")
 
     args, extra = parser.parse_known_args()
+    if extra[:1] == ["--"]:
+        extra = extra[1:]
     if args.cmd in ("detect", "track", "all") and extra:
         parser.error(f"unrecognized arguments: {' '.join(extra)}")
     if args.cmd == "analyze":
@@ -62,8 +64,7 @@ def main():
         from tracking.track import track_from_detections_json
         print("Tracking from detections JSON...")
         track_from_detections_json(args.video, args.detections,
-                                   getattr(args, "output", config.OUTPUT_PATH),
-                                   getattr(args, "log", config.TRACK_LOG_PATH))
+                                   args.output, args.log)
     print("Done.")
 
 
