@@ -59,3 +59,20 @@ def test_json_array_writer_roundtrip(tmp_path):
     w.write({"b": [1, 2]})
     w.close()
     assert json.loads(p.read_text()) == [{"a": 1}, {"b": [1, 2]}]
+
+
+def test_build_match_candidates_smoke():
+    """One live track + one overlapping detection -> exactly one candidate
+    pair (0, track_id); a far detection yields no pair for that track."""
+    from tracking.matching import build_match_candidates
+    from tracking.tracks import Track
+    near = _square_segment(0, 0, 10)
+    far = _square_segment(500, 500, 10)
+    track = Track(gen=1, area=100.0, segment=near)
+    tracked = {7: track}
+    dets = [near.copy(), far]
+    # Signature is (active_tracks, detection_segments) and the return is
+    # {det_idx: [(tid, iou, dist_norm), ...]} — not a flat pair list.
+    candidates = build_match_candidates(tracked, dets)
+    pairs = {(d, t) for d, cand_list in candidates.items() for t, *_ in cand_list}
+    assert (0, 7) in pairs and (1, 7) not in pairs
