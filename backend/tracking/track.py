@@ -14,6 +14,7 @@ from tracking.io import (
     export_tracking_log_csv,
     frame_log_record,
     open_video,
+    write_config_sidecar,
 )
 from tracking.render import apply_tracking_overlay, create_video_writer
 from tracking.tracker import Tracker
@@ -55,6 +56,8 @@ def track_from_detections_json(video_path, detections_path, output_path, log_pat
 
     csv_log_path = os.path.splitext(log_path)[0] + ".csv"
     export_tracking_log_csv(log_path, csv_log_path)
+    config_path = write_config_sidecar(log_path, cfg)
     print(f"Tracking complete. Output saved to: {output_path}")
     print(f"Tracking log saved to: {log_path}")
     print(f"Tracking CSV saved to: {csv_log_path}")
+    print(f"Tracking config saved to: {config_path}")

@@ -19,6 +19,7 @@ from tracking.io import (
     detection_record,
     ensure_parent_dir,
     open_video,
+    write_config_sidecar,
 )
 
 def load_model(model_path: str) -> YOLO:
@@ -121,6 +122,7 @@ def export_detections_json(model, video_path, detections_path, config: Optional[
     finally:
         writer.close()
         cap.release()
+    write_config_sidecar(detections_path, cfg)
     print(f"Max raw segmented instances in a frame: {max_raw_segments}")
     print(f"Max kept segmented instances in a frame (after conf/shape filters): {max_filtered_segments}")
     print(f"Segmentation confidence threshold: {cfg.segments.min_confidence}")

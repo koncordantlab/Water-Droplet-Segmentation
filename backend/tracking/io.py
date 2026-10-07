@@ -152,6 +152,16 @@ def track_record(track_id: int, track: "Track") -> dict:
     }
 
 
+def write_config_sidecar(artifact_path: str, cfg) -> str:
+    """Write <artifact stem>.config.json next to an output, so the settings that
+    produced it travel with it."""
+    path = os.path.splitext(artifact_path)[0] + ".config.json"
+    with open(path, "w", encoding="utf-8") as file:
+        json.dump(cfg.to_dict(), file, indent=2)
+        file.write("\n")
+    return path
+
+
 def frame_log_record(frame_id: int, dets: "FrameDetections", tracks: dict, events: list) -> dict:
     """One tracking_log.json element."""
     return {

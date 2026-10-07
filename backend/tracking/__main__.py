@@ -1,11 +1,15 @@
 """python -m tracking -- CLI over the two-phase pipeline. Mirrors the old
 monolith __main__ flow; every path defaults to tracking.config and is
-overridable per invocation. The analyze/plots subcommands forward their
-remaining argv to those modules' own argparse (add_help=False keeps --help
-forwarding too); detect/track/all reject unknown extras like before."""
+overridable per invocation, and detect/track/all take --config FILE (JSON
+setting overrides; `python -m tracking config` prints every setting). The
+analyze/plots subcommands forward their remaining argv to those modules' own
+argparse (add_help=False keeps --help forwarding too); config/detect/track/all
+reject unknown extras like before."""
 import argparse
+import json
 
 from tracking import config
+from tracking.config import load_config
 
 
 def _add_common(p):
@@ -13,21 +17,32 @@ def _add_common(p):
     p.add_argument("--detections", default=config.DETECTIONS_PATH)
 
 
+def _add_settings(p):
+    p.add_argument("--config", default=None,
+                   help="JSON file of setting overrides (see: python -m tracking config)")
+
+
 def main():
     parser = argparse.ArgumentParser(prog="tracking")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
+    p = sub.add_parser("config", help="print the effective tracking settings as JSON")
+    _add_settings(p)
+
     p = sub.add_parser("detect", help="run YOLO once, write detections.json")
     _add_common(p)
+    _add_settings(p)
     p.add_argument("--model", default=config.MODEL_PATH)
 
     p = sub.add_parser("track", help="consume detections.json, write tracking_log.json + annotated mp4")
     _add_common(p)
+    _add_settings(p)
     p.add_argument("--output", default=config.OUTPUT_PATH)
     p.add_argument("--log", default=config.TRACK_LOG_PATH)
 
     p = sub.add_parser("all", help="detect then track (the old script's default flow)")
     _add_common(p)
+    _add_settings(p)
     p.add_argument("--model", default=config.MODEL_PATH)
     p.add_argument("--output", default=config.OUTPUT_PATH)
     p.add_argument("--log", default=config.TRACK_LOG_PATH)
@@ -40,8 +55,16 @@ def main():
     args, extra = parser.parse_known_args()
     if extra[:1] == ["--"]:
         extra = extra[1:]
-    if args.cmd in ("detect", "track", "all") and extra:
+    if args.cmd in ("config", "detect", "track", "all") and extra:
         parser.error(f"unrecognized arguments: {' '.join(extra)}")
+    if args.cmd in ("config", "detect", "track", "all"):
+        try:
+            cfg = load_config(args.config)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+    if args.cmd == "config":
+        print(json.dumps(cfg.to_dict(), indent=2))
+        return
     if args.cmd == "analyze":
         import sys
         from tracking import analyze
@@ -59,12 +82,12 @@ def main():
         print("Loading YOLO model...")
         model = load_model(args.model)
         print("Exporting detections...")
-        export_detections_json(model, args.video, args.detections)
+        export_detections_json(model, args.video, args.detections, config=cfg)
     if args.cmd in ("track", "all"):
         from tracking.track import track_from_detections_json
         print("Tracking from detections JSON...")
         track_from_detections_json(args.video, args.detections,
-                                   args.output, args.log)
+                                   args.output, args.log, config=cfg)
     print("Done.")
 
 

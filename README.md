@@ -137,17 +137,29 @@ tracker (with merge detection) into `tracking_log.json` + an annotated video —
 plus analysis/plotting consumers. Run from `backend/`:
 
 ```bash
-python -m tracking all                      # detect + track with the config.py defaults
+python -m tracking all                      # detect + track with the default settings
 python -m tracking detect --video V --detections D
 python -m tracking track  --video V --detections D --output OUT.mp4 --log LOG.json
 python -m tracking analyze --detections D --tracking-log LOG.json   # insights JSON + CSVs
 python -m tracking plots   --tracking-log LOG.json   # timeline plots
 ```
 
-Tuning lives in `backend/tracking/config.py` (~110 documented tuning constants) —
-prefer adjusting constants over editing the matchers, which are heavily
-interdependent. Uses `weights_DP(6).pt` on purpose (the thresholds were tuned
-against it). The Docker image does not include this package.
+Settings live in `backend/tracking/config.py` as `TrackingConfig` (about 100
+documented settings in groups such as `match`, `direct_merge` and
+`persistent_growth`). To tune a run without editing code, put only the changed
+settings in a JSON file and pass it with `--config`:
+
+```bash
+python -m tracking config > defaults.json                  # every setting and its default
+echo '{"direct_merge": {"min_iou": 0.25}}' > tuned.json
+python -m tracking track --video V --detections D --output OUT.mp4 --log LOG.json --config tuned.json
+```
+
+Unknown or mistyped settings stop the run with an error naming them. Every run
+writes the settings it used next to its output (`LOG.config.json`,
+`D.config.json`). Prefer adjusting settings over editing the matchers, which
+are heavily interdependent. Uses `weights_DP(6).pt` on purpose (the thresholds
+were tuned against it). The Docker image does not include this package.
 
 ## Contributing
 
