@@ -8,24 +8,19 @@ import numpy as np
 import torch
 
 from tracking import events
+from tracking.associate import PairPlan, collect_candidates, detect_direct_merges, plan_pairs
 from tracking.config import DEFAULT_CONFIG, TrackingConfig
 from tracking.detections import FrameDetections
-from tracking.geometry import is_relevant_circular_segment
 from tracking.matching import (
     area_growth_ratio,
     area_ratio_values,
-    build_match_candidates,
-    estimate_adaptive_growth_threshold,
     estimate_unknown_parent_count,
     is_local_growth_continuation,
-    is_unknown_merge_from_birth,
     is_unknown_merge_from_match,
     is_valid_match,
     reference_object_area,
     resolve_prefilter_device,
-    select_inferred_merge_parents,
     select_match_growth_merge_support_parents,
-    select_merge_parents,
 )
 from tracking.tracks import (
     Track,
@@ -33,6 +28,7 @@ from tracking.tracks import (
     register_merge_candidate,
     reset_merge_candidate_state,
 )
+from tracking.unmatched import resolve_unmatched
 
 Candidates = Dict[int, List[Tuple[int, float, float]]]  # det_idx -> [(track_id, iou, dist_norm)]
 
@@ -82,7 +78,11 @@ class Tracker:
         if self._frames_seen == 0:
             self._first_frame(ctx)
         else:
-            self._legacy_frame(ctx)  # transitional: carved into stage modules in Tasks 6-7
+            collect_candidates(self, ctx)
+            detect_direct_merges(self, ctx)
+            plan = plan_pairs(self, ctx)
+            self._resolve_matches_legacy(ctx, plan)  # transitional: becomes matched.resolve_matches in Task 7
+            resolve_unmatched(self, ctx)
             self._age_tracks(ctx)
         self._frames_seen += 1
         return FrameResult(ctx.events, ctx.merged_children)
@@ -108,81 +108,15 @@ class Tracker:
         for tid in to_remove:
             self.tracks.pop(tid, None)
 
-    def _legacy_frame(self, ctx: FrameContext) -> None:
-        """Transitional: the lifted association-and-resolution middle of the
-        former track.py loop (Tasks 6-7 carve it into stage modules)."""
-        ctx.active_tracks = {tid: t for tid, t in self.tracks.items() if t.missed <= self.cfg.max_missed_frames}
-        ctx.candidates = build_match_candidates(ctx.active_tracks, ctx.dets.segments, self.cfg, self.device)
-
-
-        # Merge detection
-        if self.cfg.direct_merge.enabled:
-            for det_idx, cand_list in ctx.candidates.items():
-                if det_idx in ctx.assigned_dets:
-                    continue
-
-                det_segment = ctx.dets.segments[det_idx]
-                det_area = ctx.dets.areas[det_idx]
-                parent_ids = select_merge_parents(det_segment, det_area, cand_list, ctx.active_tracks, ctx.assigned_tracks, self.cfg)
-                if len(parent_ids) < 2:
-                    continue
-
-                child_gen = max(ctx.active_tracks[pid].gen for pid in parent_ids) + 1
-                child_id = self.new_track(child_gen, det_area, det_segment)
-                det_id = ctx.dets.det_ids[det_idx]
-                ctx.events.append(events.merge(child_id, child_gen, parent_ids, det_id))
-                ctx.merged_children.add(child_id)
-                ctx.assigned_tracks.add(child_id)
-
-                for pid in parent_ids:
-                    ctx.merged_parents.add(pid)
-                    ctx.assigned_tracks.add(pid)
-
-                ctx.assigned_dets.add(det_idx)
-
-        # One-to-one matching for remaining detections
-        scored_pairs: List[Tuple[float, int, int, float, float]] = []
-        for det_idx, cand_list in ctx.candidates.items():
-            if det_idx in ctx.assigned_dets:
-                continue
-            for tid, iou, dist_norm in cand_list:
-                if tid in ctx.assigned_tracks or tid in ctx.merged_parents:
-                    continue
-                det_area = ctx.dets.areas[det_idx]
-                if not is_valid_match(self.tracks[tid], det_area, iou, dist_norm, self.cfg):
-                    continue
-                score = iou - 0.1 * dist_norm
-                scored_pairs.append((score, tid, det_idx, iou, dist_norm))
-
-        scored_pairs.sort(reverse=True)
-        best_track_for_det: Dict[int, Tuple[int, float]] = {}
-        best_det_for_track: Dict[int, Tuple[int, float]] = {}
-        if self.cfg.match.require_mutual_best:
-            for score, tid, det_idx, _, _ in scored_pairs:
-                prev_det = best_det_for_track.get(tid)
-                if prev_det is None or score > prev_det[1]:
-                    best_det_for_track[tid] = (det_idx, score)
-                prev_track = best_track_for_det.get(det_idx)
-                if prev_track is None or score > prev_track[1]:
-                    best_track_for_det[det_idx] = (tid, score)
-
-        frame_growth_merge_threshold = estimate_adaptive_growth_threshold(
-            scored_pairs,
-            self.tracks,
-            ctx.dets.areas,
-            self.cfg,
-        )
-        frame_growth_reject_threshold = max(
-            self.cfg.unknown_merge.match_area_growth,
-            frame_growth_merge_threshold + 0.35,
-        )
-
-        for _, tid, det_idx, iou, dist_norm in scored_pairs:
+    def _resolve_matches_legacy(self, ctx: FrameContext, plan: PairPlan) -> None:
+        """Transitional: the lifted one-to-one matching loop (Task 7 carves it
+        into tracking.matched)."""
+        for _, tid, det_idx, iou, dist_norm in plan.scored_pairs:
             if tid in ctx.assigned_tracks or det_idx in ctx.assigned_dets:
                 continue
             if self.cfg.match.require_mutual_best:
-                best_det = best_det_for_track.get(tid)
-                best_track = best_track_for_det.get(det_idx)
+                best_det = plan.best_det_for_track.get(tid)
+                best_track = plan.best_track_for_det.get(det_idx)
                 if best_det is None or best_track is None:
                     continue
                 if best_det[0] != det_idx or best_track[0] != tid:
@@ -209,7 +143,7 @@ class Tracker:
                     prev_area,
                     det_area,
                     self.cfg,
-                    frame_growth_reject_threshold,
+                    plan.reject_threshold,
                 )
                 if (
                     is_growth_merge
@@ -221,7 +155,7 @@ class Tracker:
                     reset_merge_candidate_state(track)
                     continue
             if self.cfg.growth_rescue.enabled:
-                if growth_ratio >= frame_growth_merge_threshold and not is_local_growth_continuation(iou, dist_norm, self.cfg):
+                if growth_ratio >= plan.merge_threshold and not is_local_growth_continuation(iou, dist_norm, self.cfg):
                     support_parents = select_match_growth_merge_support_parents(
                         tid,
                         det_idx,
@@ -231,7 +165,7 @@ class Tracker:
                         ctx.assigned_tracks,
                         ctx.merged_parents,
                         ctx.candidates.get(det_idx, []),
-                        best_det_for_track,
+                        plan.best_det_for_track,
                         self.cfg,
                     )
                     if support_parents:
@@ -245,7 +179,7 @@ class Tracker:
                         ctx.assigned_tracks.add(tid)
                         ctx.assigned_dets.add(det_idx)
                         ctx.merged_children.add(tid)
-                        ctx.events.append(events.rescue_merge(tid, merged_gen, support_parents, detected_parents, det_id, growth_ratio, frame_growth_merge_threshold))
+                        ctx.events.append(events.rescue_merge(tid, merged_gen, support_parents, detected_parents, det_id, growth_ratio, plan.merge_threshold))
                         for pid in support_parents:
                             ctx.merged_parents.add(pid)
                             ctx.assigned_tracks.add(pid)
@@ -261,7 +195,7 @@ class Tracker:
                     ctx.merged_children.add(tid)
                     ctx.events.append(events.matched_growth_unknown(tid, track.gen, det_id, area_ratio))
                     continue
-            if growth_ratio >= frame_growth_merge_threshold and not is_growth_continuation_match:
+            if growth_ratio >= plan.merge_threshold and not is_growth_continuation_match:
                 suppress_promotion_for_wobble = (
                     iou >= self.cfg.persistent_growth.wobble_min_iou
                     and dist_norm <= self.cfg.persistent_growth.wobble_max_dist_norm
@@ -276,7 +210,7 @@ class Tracker:
                     track,
                     ctx.frame_id,
                     growth_ratio,
-                    frame_growth_merge_threshold,
+                    plan.merge_threshold,
                     self.cfg,
                 )
                 if (
@@ -290,91 +224,12 @@ class Tracker:
                     unknown_parent_count = estimate_unknown_parent_count(det_area, [tid], self.tracks, self.cfg)
                     if unknown_parent_count <= 0:
                         unknown_parent_count = 1
-                    ctx.events.append(events.persistent_growth_merge(tid, track.gen, unknown_parent_count, det_id, growth_ratio, frame_growth_merge_threshold, streak, candidate_score, track.merge_candidate_peak_area_ratio))
+                    ctx.events.append(events.persistent_growth_merge(tid, track.gen, unknown_parent_count, det_id, growth_ratio, plan.merge_threshold, streak, candidate_score, track.merge_candidate_peak_area_ratio))
                     reset_merge_candidate_state(track)
                     continue
-                ctx.events.append(events.merge_candidate(tid, det_id, iou, dist_norm, growth_ratio, frame_growth_merge_threshold, streak, candidate_score, track.merge_candidate_peak_area_ratio))
+                ctx.events.append(events.merge_candidate(tid, det_id, iou, dist_norm, growth_ratio, plan.merge_threshold, streak, candidate_score, track.merge_candidate_peak_area_ratio))
                 continue
             if is_growth_continuation_match:
                 ctx.events.append(events.match_growth(tid, det_id, iou, dist_norm, area_ratio_values(prev_area, det_area)))
                 continue
             ctx.events.append(events.match(tid, det_id, iou, dist_norm))
-
-        # New detections that weren't assigned
-        for det_idx in range(len(ctx.dets)):
-            if det_idx in ctx.assigned_dets:
-                continue
-
-            det_id = ctx.dets.det_ids[det_idx]
-            det_segment = ctx.dets.segments[det_idx]
-            det_area = ctx.dets.areas[det_idx]
-            if self.cfg.inferred_merge.enabled:
-                allow_single_parent_inferred = ctx.frame_id > self.cfg.inferred_merge.warmup_frames
-                inferred_parents = select_inferred_merge_parents(
-                    det_segment,
-                    det_area,
-                    self.tracks,
-                    ctx.assigned_tracks,
-                    ctx.merged_parents,
-                    self.cfg,
-                    allow_single_parent=allow_single_parent_inferred,
-                )
-                if len(inferred_parents) >= self.cfg.inferred_merge.min_parents:
-                    detected_parents = list(inferred_parents)
-                    survivor_id = min(
-                        inferred_parents,
-                        key=lambda pid: (
-                            self.tracks[pid].missed,
-                            -self.tracks[pid].area,
-                        ),
-                    )
-                    survivor_was_lost = self.tracks[survivor_id].missed > 0
-                    survivor_prev_area = self.tracks[survivor_id].area
-                    lineage_parents = [pid for pid in detected_parents if pid != survivor_id]
-                    unknown_parent_count = estimate_unknown_parent_count(det_area, detected_parents, self.tracks, self.cfg)
-                    merged_gen = max(self.tracks[pid].gen for pid in inferred_parents) + 1
-                    self.tracks[survivor_id].missed = 0
-                    self.tracks[survivor_id].gen = merged_gen
-                    self.tracks[survivor_id].segment = det_segment
-                    self.tracks[survivor_id].area = det_area
-                    reset_merge_candidate_state(self.tracks[survivor_id])
-                    ctx.assigned_tracks.add(survivor_id)
-                    ctx.assigned_dets.add(det_idx)
-                    ctx.merged_children.add(survivor_id)
-
-                    inferred_reason = "inferred_multi_parent_unmatched"
-                    if len(detected_parents) == 1:
-                        inferred_reason = (
-                            "single_parent_inferred_from_lost"
-                            if survivor_was_lost
-                            else "single_parent_inferred_unmatched_active"
-                        )
-                    ctx.events.append(events.unmatched_inferred_merge(survivor_id, merged_gen, lineage_parents, detected_parents, unknown_parent_count, det_id, inferred_reason, area_growth_ratio(survivor_prev_area, det_area)))
-
-                    for pid in lineage_parents:
-                        ctx.merged_parents.add(pid)
-                        ctx.assigned_tracks.add(pid)
-                    continue
-
-            # Keep non-circular detections for association/merge, but do not spawn new tracks from them.
-            if self.cfg.segments.filter_non_circular and not is_relevant_circular_segment(det_segment, self.cfg):
-                ctx.events.append(events.shape_rejected(det_id))
-                continue
-
-            if self.cfg.unknown_merge.enabled:
-                is_unknown_merge, area_ratio = is_unknown_merge_from_birth(det_area, ctx.reference_area, self.cfg)
-                if is_unknown_merge:
-                    promoted = self.cfg.unknown_merge.promote_large_birth
-                    event_gen = 2 if promoted else 1
-                    track_id = self.new_track(event_gen, det_area, det_segment)
-                    ctx.events.append(events.large_unmatched(
-                        promoted, track_id, event_gen, det_id, area_ratio, ctx.reference_area))
-                    if promoted:
-                        ctx.merged_children.add(track_id)
-                    ctx.assigned_tracks.add(track_id)
-                    continue
-
-            track_id = self.new_track(1, det_area, det_segment)
-            ctx.events.append(events.birth(track_id, 1, det_id))
-            ctx.assigned_tracks.add(track_id)
-
