@@ -3,6 +3,7 @@ UPPER_CASE constants (frozen in fixtures/tracking/legacy_constants.json),
 strict overrides, and the JSON round trip."""
 import dataclasses
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -174,6 +175,16 @@ def test_override_unknown_key_names_it():
 ])
 def test_override_wrong_type_is_rejected(overrides, message):
     with pytest.raises(ValueError, match=message):
+        DEFAULT_CONFIG.with_overrides(overrides)
+
+
+@pytest.mark.parametrize("overrides, key", [
+    # 0 crashed mid-run: min() over an empty parent list / quantiles of an empty sample.
+    ({"inferred_merge": {"min_parents": 0}}, "inferred_merge.min_parents"),
+    ({"adaptive_growth": {"min_samples": 0}}, "adaptive_growth.min_samples"),
+])
+def test_override_below_minimum_is_rejected(overrides, key):
+    with pytest.raises(ValueError, match=rf"{re.escape(key)}: must be >= 1"):
         DEFAULT_CONFIG.with_overrides(overrides)
 
 

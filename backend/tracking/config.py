@@ -73,7 +73,7 @@ class DirectMergeConfig:
 class InferredMergeConfig:
     """Inferred merge: an unmatched detection explained by recently lost tracks."""
     enabled: bool = True  # ENABLE_INFERRED_MERGE
-    min_parents: int = 1  # INFERRED_MERGE_MIN_PARENTS
+    min_parents: int = field(default=1, metadata={"min": 1})  # INFERRED_MERGE_MIN_PARENTS (0 crashes: no parent to survive)
     max_missed: Optional[int] = None  # INFERRED_MERGE_MAX_MISSED; None = follow max_missed_frames
     area_factor: float = 1.05  # INFERRED_MERGE_AREA_FACTOR
     combined_area_factor: float = 0.75  # INFERRED_MERGE_COMBINED_AREA_FACTOR
@@ -150,7 +150,7 @@ class PersistentGrowthConfig:
 class AdaptiveGrowthConfig:
     """The per-frame growth threshold estimated from continuation matches."""
     fallback_threshold: float = 1.12  # MATCH_GROWTH_MERGE_MIN_AREA_GROWTH: used below min_samples
-    min_samples: int = 12  # ADAPTIVE_GROWTH_BASELINE_MIN_SAMPLES
+    min_samples: int = field(default=12, metadata={"min": 1})  # ADAPTIVE_GROWTH_BASELINE_MIN_SAMPLES (0 crashes: quantile of no samples)
     mad_multiplier: float = 4.0  # ADAPTIVE_GROWTH_MAD_MULTIPLIER
     min_threshold: float = 1.08  # ADAPTIVE_GROWTH_MIN_THRESHOLD
 
@@ -248,7 +248,11 @@ def _apply(obj: Any, overrides: Any, path: str) -> Any:
         if dataclasses.is_dataclass(current):
             changes[key] = _apply(current, value, where)
         else:
-            changes[key] = _coerce(value, current, fields[key].default is None, where)
+            coerced = _coerce(value, current, fields[key].default is None, where)
+            minimum = fields[key].metadata.get("min")
+            if minimum is not None and coerced is not None and coerced < minimum:
+                raise ValueError(f"{where}: must be >= {minimum}, got {coerced!r}")
+            changes[key] = coerced
     return dataclasses.replace(obj, **changes)
 
 
