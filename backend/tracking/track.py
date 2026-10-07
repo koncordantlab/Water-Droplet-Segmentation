@@ -9,34 +9,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from tracking.config import (
-    DRAW_TRACK_OVERLAY,
-    ENABLE_INFERRED_MERGE,
-    ENABLE_INFERRED_UNKNOWN_MERGE,
-    ENABLE_MATCH_GROWTH_MERGE_RESCUE,
-    ENABLE_MERGE_DETECTION,
-    ENABLE_PERSISTENT_GROWTH_MERGE_PROMOTION,
-    FILTER_NON_CIRCULAR_SEGMENTS,
-    INFERRED_MERGE_MIN_PARENTS,
-    INFERRED_MERGE_WARMUP_FRAMES,
-    INFERRED_UNKNOWN_MATCH_AREA_GROWTH,
-    KEEP_NON_CIRCULAR_FOR_ASSOCIATION,
-    MAX_MATCH_AREA_RATIO,
-    MAX_MISSED_FRAMES,
-    MIN_SEGMENT_CONFIDENCE,
-    PERSISTENT_GROWTH_MIN_EVENTS,
-    PERSISTENT_GROWTH_MIN_STREAK,
-    PERSISTENT_GROWTH_PROMOTION_MIN_AREA_RATIO,
-    PERSISTENT_GROWTH_PROMOTION_MIN_SCORE,
-    PERSISTENT_GROWTH_SUPPRESS_HIGH_IOU,
-    PERSISTENT_GROWTH_SUPPRESS_LOW_MOTION,
-    PROMOTE_LARGE_BIRTH_TO_UNKNOWN_MERGE,
-    PROMOTE_MATCH_GROWTH_TO_UNKNOWN_MERGE,
-    REJECT_MATCH_ON_LARGE_AREA_GROWTH,
-    REQUIRE_INSTANCE_SEGMENTATION,
-    REQUIRE_MUTUAL_BEST_MATCH,
-    TRACKING_PREFILTER_DEVICE,
-)
+from tracking.config import DEFAULT_CONFIG, TrackingConfig
 from tracking.geometry import detection_area, is_relevant_circular_segment
 from tracking.io import (
     JsonArrayWriter,
@@ -57,6 +30,7 @@ from tracking.matching import (
     is_unknown_merge_from_match,
     is_valid_match,
     reference_object_area,
+    resolve_prefilter_device,
     select_inferred_merge_parents,
     select_match_growth_merge_support_parents,
     select_merge_parents,
@@ -69,7 +43,7 @@ from tracking.tracks import (
     reset_merge_candidate_state,
 )
 
-def detections_from_frame_record(frame_record):
+def detections_from_frame_record(frame_record, cfg: TrackingConfig):
     detections = []
     detection_meta = []
     detection_segments: List[Optional[np.ndarray]] = []
@@ -83,7 +57,7 @@ def detections_from_frame_record(frame_record):
         conf = float(det.get("conf", 0.0))
         cls = int(det.get("cls", 0))
         det_id = int(det.get("det_id", det_idx))
-        if conf < MIN_SEGMENT_CONFIDENCE:
+        if conf < cfg.segments.min_confidence:
             dropped_low_conf += 1
             continue
         segment_raw = det.get("segment")
@@ -92,7 +66,7 @@ def detections_from_frame_record(frame_record):
             points = np.asarray(segment_raw, dtype=np.float32)
             if points.ndim == 2 and points.shape[0] >= 3 and points.shape[1] == 2:
                 segment = points
-        if REQUIRE_INSTANCE_SEGMENTATION and segment is None:
+        if cfg.segments.require_segmentation and segment is None:
             frame_id = frame_record.get("frame", "?")
             raise RuntimeError(
                 f"Detections JSON is missing valid segment data (frame={frame_id}, det_id={det_id}). "
@@ -101,13 +75,13 @@ def detections_from_frame_record(frame_record):
         det_area = float(det.get("area", 0.0))
         if det_area <= 0:
             det_area = detection_area(segment)
-        if REQUIRE_INSTANCE_SEGMENTATION and det_area <= 0:
+        if cfg.segments.require_segmentation and det_area <= 0:
             frame_id = frame_record.get("frame", "?")
             raise RuntimeError(
                 f"Detections JSON has non-positive segmented area (frame={frame_id}, det_id={det_id})."
             )
-        if segment is not None and not is_relevant_circular_segment(segment):
-            if KEEP_NON_CIRCULAR_FOR_ASSOCIATION:
+        if segment is not None and not is_relevant_circular_segment(segment, cfg):
+            if cfg.segments.keep_non_circular_for_association:
                 kept_non_circular += 1
             else:
                 dropped_non_circular += 1
@@ -120,18 +94,21 @@ def detections_from_frame_record(frame_record):
         frame_id = frame_record.get("frame", "?")
         print(
             f"Warning: filtered detections in JSON "
-            f"(frame={frame_id}, low_conf={dropped_low_conf}, conf_threshold={MIN_SEGMENT_CONFIDENCE}, "
+            f"(frame={frame_id}, low_conf={dropped_low_conf}, conf_threshold={cfg.segments.min_confidence}, "
             f"non_circular_dropped={dropped_non_circular}, non_circular_kept={kept_non_circular}, "
             f"kept={len(detections)}, total={total})"
         )
     return detections, detection_meta, detection_segments, detection_areas
 
-def track_from_detections_json(video_path, detections_path, output_path, log_path):
+def track_from_detections_json(video_path, detections_path, output_path, log_path,
+                               config: Optional[TrackingConfig] = None):
+    cfg = DEFAULT_CONFIG if config is None else config
     cap, fps, width, height = open_video(video_path)
     ensure_parent_dir(output_path)
     ensure_parent_dir(log_path)
     writer = create_video_writer(output_path, fps, width, height)
-    print(f"Tracking candidate prefilter device: {TRACKING_PREFILTER_DEVICE}")
+    device = resolve_prefilter_device(cfg)
+    print(f"Tracking candidate prefilter device: {device}")
 
     with open(detections_path, "r", encoding="utf-8") as file:
         frames_data = json.load(file)
@@ -149,9 +126,9 @@ def track_from_detections_json(video_path, detections_path, output_path, log_pat
                 break
 
             frame_id = int(frame_record.get("frame", frame_index + 1))
-            detections, detection_meta, detection_segments, detection_areas = detections_from_frame_record(frame_record)
+            detections, detection_meta, detection_segments, detection_areas = detections_from_frame_record(frame_record, cfg)
             frame_median_area = float(np.median(detection_areas)) if detection_areas else 0.0
-            reference_area = reference_object_area(tracked_objects, frame_median_area)
+            reference_area = reference_object_area(tracked_objects, frame_median_area, cfg)
             frame_events = []
             merged_children = set()
 
@@ -169,22 +146,22 @@ def track_from_detections_json(video_path, detections_path, output_path, log_pat
                     })
                     next_id += 1
             else:
-                active_tracks = {tid: t for tid, t in tracked_objects.items() if t.missed <= MAX_MISSED_FRAMES}
-                candidates = build_match_candidates(active_tracks, detection_segments)
+                active_tracks = {tid: t for tid, t in tracked_objects.items() if t.missed <= cfg.max_missed_frames}
+                candidates = build_match_candidates(active_tracks, detection_segments, cfg, device)
 
                 assigned_tracks = set()
                 assigned_dets = set()
                 merged_parents = set()
 
                 # Merge detection
-                if ENABLE_MERGE_DETECTION:
+                if cfg.direct_merge.enabled:
                     for det_idx, cand_list in candidates.items():
                         if det_idx in assigned_dets:
                             continue
 
                         det_segment = detection_segments[det_idx] if det_idx < len(detection_segments) else None
                         det_area = detection_areas[det_idx] if det_idx < len(detection_areas) else detection_area(det_segment)
-                        parent_ids = select_merge_parents(det_segment, det_area, cand_list, active_tracks, assigned_tracks)
+                        parent_ids = select_merge_parents(det_segment, det_area, cand_list, active_tracks, assigned_tracks, cfg)
                         if len(parent_ids) < 2:
                             continue
 
@@ -223,7 +200,7 @@ def track_from_detections_json(video_path, detections_path, output_path, log_pat
                         if tid in assigned_tracks or tid in merged_parents:
                             continue
                         det_area = detection_areas[det_idx] if det_idx < len(detection_areas) else detection_area(detection_segments[det_idx])
-                        if not is_valid_match(tracked_objects[tid], det_area, iou, dist_norm):
+                        if not is_valid_match(tracked_objects[tid], det_area, iou, dist_norm, cfg):
                             continue
                         score = iou - 0.1 * dist_norm
                         scored_pairs.append((score, tid, det_idx, iou, dist_norm))
@@ -231,7 +208,7 @@ def track_from_detections_json(video_path, detections_path, output_path, log_pat
                 scored_pairs.sort(reverse=True)
                 best_track_for_det: Dict[int, Tuple[int, float]] = {}
                 best_det_for_track: Dict[int, Tuple[int, float]] = {}
-                if REQUIRE_MUTUAL_BEST_MATCH:
+                if cfg.match.require_mutual_best:
                     for score, tid, det_idx, _, _ in scored_pairs:
                         prev_det = best_det_for_track.get(tid)
                         if prev_det is None or score > prev_det[1]:
@@ -244,16 +221,17 @@ def track_from_detections_json(video_path, detections_path, output_path, log_pat
                     scored_pairs,
                     tracked_objects,
                     detection_areas,
+                    cfg,
                 )
                 frame_growth_reject_threshold = max(
-                    INFERRED_UNKNOWN_MATCH_AREA_GROWTH,
+                    cfg.unknown_merge.match_area_growth,
                     frame_growth_merge_threshold + 0.35,
                 )
 
                 for _, tid, det_idx, iou, dist_norm in scored_pairs:
                     if tid in assigned_tracks or det_idx in assigned_dets:
                         continue
-                    if REQUIRE_MUTUAL_BEST_MATCH:
+                    if cfg.match.require_mutual_best:
                         best_det = best_det_for_track.get(tid)
                         best_track = best_track_for_det.get(det_idx)
                         if best_det is None or best_track is None:
@@ -261,10 +239,10 @@ def track_from_detections_json(video_path, detections_path, output_path, log_pat
                         if best_det[0] != det_idx or best_track[0] != tid:
                             continue
                     det_area = detection_areas[det_idx] if det_idx < len(detection_areas) else detection_area(detection_segments[det_idx])
-                    if not is_valid_match(tracked_objects[tid], det_area, iou, dist_norm):
+                    if not is_valid_match(tracked_objects[tid], det_area, iou, dist_norm, cfg):
                         continue
                     track = tracked_objects[tid]
-                    decay_merge_candidate_state(track, frame_id)
+                    decay_merge_candidate_state(track, frame_id, cfg)
                     det_id = detection_meta[det_idx][2] if det_idx < len(detection_meta) else det_idx
                     new_segment = detection_segments[det_idx] if det_idx < len(detection_segments) else None
                     prev_area = track.area
@@ -272,21 +250,22 @@ def track_from_detections_json(video_path, detections_path, output_path, log_pat
                     is_growth_merge = False
                     is_growth_continuation_match = False
                     area_ratio = 0.0
-                    if ENABLE_INFERRED_UNKNOWN_MERGE:
+                    if cfg.unknown_merge.enabled:
                         is_growth_continuation_match = (
                             det_area > prev_area
-                            and area_ratio_values(prev_area, det_area) > MAX_MATCH_AREA_RATIO
-                            and is_local_growth_continuation(iou, dist_norm)
+                            and area_ratio_values(prev_area, det_area) > cfg.match.max_area_ratio
+                            and is_local_growth_continuation(iou, dist_norm, cfg)
                         )
                         is_growth_merge, area_ratio = is_unknown_merge_from_match(
                             prev_area,
                             det_area,
+                            cfg,
                             frame_growth_reject_threshold,
                         )
                         if (
                             is_growth_merge
-                            and REJECT_MATCH_ON_LARGE_AREA_GROWTH
-                            and not PROMOTE_MATCH_GROWTH_TO_UNKNOWN_MERGE
+                            and cfg.unknown_merge.reject_large_growth_match
+                            and not cfg.unknown_merge.promote_match_growth
                             and not is_growth_continuation_match
                         ):
                             frame_events.append({
@@ -300,8 +279,8 @@ def track_from_detections_json(video_path, detections_path, output_path, log_pat
                             })
                             reset_merge_candidate_state(track)
                             continue
-                    if ENABLE_MATCH_GROWTH_MERGE_RESCUE:
-                        if growth_ratio >= frame_growth_merge_threshold and not is_local_growth_continuation(iou, dist_norm):
+                    if cfg.growth_rescue.enabled:
+                        if growth_ratio >= frame_growth_merge_threshold and not is_local_growth_continuation(iou, dist_norm, cfg):
                             support_parents = select_match_growth_merge_support_parents(
                                 tid,
                                 det_idx,
@@ -312,6 +291,7 @@ def track_from_detections_json(video_path, detections_path, output_path, log_pat
                                 merged_parents,
                                 candidates.get(det_idx, []),
                                 best_det_for_track,
+                                cfg,
                             )
                             if support_parents:
                                 detected_parents = [tid] + support_parents
@@ -345,7 +325,7 @@ def track_from_detections_json(video_path, detections_path, output_path, log_pat
                     track.area = det_area
                     assigned_tracks.add(tid)
                     assigned_dets.add(det_idx)
-                    if ENABLE_INFERRED_UNKNOWN_MERGE and is_growth_merge and PROMOTE_MATCH_GROWTH_TO_UNKNOWN_MERGE:
+                    if cfg.unknown_merge.enabled and is_growth_merge and cfg.unknown_merge.promote_match_growth:
                             reset_merge_candidate_state(track)
                             track.gen += 1
                             merged_children.add(tid)
@@ -361,8 +341,8 @@ def track_from_detections_json(video_path, detections_path, output_path, log_pat
                             continue
                     if growth_ratio >= frame_growth_merge_threshold and not is_growth_continuation_match:
                         suppress_promotion_for_wobble = (
-                            iou >= PERSISTENT_GROWTH_SUPPRESS_HIGH_IOU
-                            and dist_norm <= PERSISTENT_GROWTH_SUPPRESS_LOW_MOTION
+                            iou >= cfg.persistent_growth.wobble_min_iou
+                            and dist_norm <= cfg.persistent_growth.wobble_max_dist_norm
                         )
                         if suppress_promotion_for_wobble:
                             # Treat high-overlap low-motion growth as contour wobble, not merge evidence.
@@ -383,16 +363,17 @@ def track_from_detections_json(video_path, detections_path, output_path, log_pat
                             frame_id,
                             growth_ratio,
                             frame_growth_merge_threshold,
+                            cfg,
                         )
                         if (
-                            ENABLE_PERSISTENT_GROWTH_MERGE_PROMOTION
-                            and streak >= max(PERSISTENT_GROWTH_MIN_STREAK, PERSISTENT_GROWTH_MIN_EVENTS)
-                            and candidate_score >= PERSISTENT_GROWTH_PROMOTION_MIN_SCORE
-                            and track.merge_candidate_peak_area_ratio >= PERSISTENT_GROWTH_PROMOTION_MIN_AREA_RATIO
+                            cfg.persistent_growth.enabled
+                            and streak >= max(cfg.persistent_growth.min_streak, cfg.persistent_growth.min_events)
+                            and candidate_score >= cfg.persistent_growth.promotion_min_score
+                            and track.merge_candidate_peak_area_ratio >= cfg.persistent_growth.promotion_min_area_ratio
                         ):
                             track.gen += 1
                             merged_children.add(tid)
-                            unknown_parent_count = estimate_unknown_parent_count(det_area, [tid], tracked_objects)
+                            unknown_parent_count = estimate_unknown_parent_count(det_area, [tid], tracked_objects, cfg)
                             if unknown_parent_count <= 0:
                                 unknown_parent_count = 1
                             frame_events.append({
@@ -452,17 +433,18 @@ def track_from_detections_json(video_path, detections_path, output_path, log_pat
                     det_id = detection_meta[det_idx][2] if det_idx < len(detection_meta) else det_idx
                     det_segment = detection_segments[det_idx] if det_idx < len(detection_segments) else None
                     det_area = detection_areas[det_idx] if det_idx < len(detection_areas) else detection_area(det_segment)
-                    if ENABLE_INFERRED_MERGE:
-                        allow_single_parent_inferred = frame_id > INFERRED_MERGE_WARMUP_FRAMES
+                    if cfg.inferred_merge.enabled:
+                        allow_single_parent_inferred = frame_id > cfg.inferred_merge.warmup_frames
                         inferred_parents = select_inferred_merge_parents(
                             det_segment,
                             det_area,
                             tracked_objects,
                             assigned_tracks,
                             merged_parents,
+                            cfg,
                             allow_single_parent=allow_single_parent_inferred,
                         )
-                        if len(inferred_parents) >= INFERRED_MERGE_MIN_PARENTS:
+                        if len(inferred_parents) >= cfg.inferred_merge.min_parents:
                             detected_parents = list(inferred_parents)
                             survivor_id = min(
                                 inferred_parents,
@@ -474,7 +456,7 @@ def track_from_detections_json(video_path, detections_path, output_path, log_pat
                             survivor_was_lost = tracked_objects[survivor_id].missed > 0
                             survivor_prev_area = tracked_objects[survivor_id].area
                             lineage_parents = [pid for pid in detected_parents if pid != survivor_id]
-                            unknown_parent_count = estimate_unknown_parent_count(det_area, detected_parents, tracked_objects)
+                            unknown_parent_count = estimate_unknown_parent_count(det_area, detected_parents, tracked_objects, cfg)
                             merged_gen = max(tracked_objects[pid].gen for pid in inferred_parents) + 1
                             tracked_objects[survivor_id].missed = 0
                             tracked_objects[survivor_id].gen = merged_gen
@@ -510,7 +492,7 @@ def track_from_detections_json(video_path, detections_path, output_path, log_pat
                             continue
 
                     # Keep non-circular detections for association/merge, but do not spawn new tracks from them.
-                    if FILTER_NON_CIRCULAR_SEGMENTS and not is_relevant_circular_segment(det_segment):
+                    if cfg.segments.filter_non_circular and not is_relevant_circular_segment(det_segment, cfg):
                         frame_events.append({
                             "type": "shape_rejected",
                             "det_id": det_id,
@@ -518,11 +500,11 @@ def track_from_detections_json(video_path, detections_path, output_path, log_pat
                         })
                         continue
 
-                    if ENABLE_INFERRED_UNKNOWN_MERGE:
-                        is_unknown_merge, area_ratio = is_unknown_merge_from_birth(det_area, reference_area)
+                    if cfg.unknown_merge.enabled:
+                        is_unknown_merge, area_ratio = is_unknown_merge_from_birth(det_area, reference_area, cfg)
                         if is_unknown_merge:
-                            event_type = "inferred_merge_unknown" if PROMOTE_LARGE_BIRTH_TO_UNKNOWN_MERGE else "large_birth"
-                            event_gen = 2 if PROMOTE_LARGE_BIRTH_TO_UNKNOWN_MERGE else 1
+                            event_type = "inferred_merge_unknown" if cfg.unknown_merge.promote_large_birth else "large_birth"
+                            event_gen = 2 if cfg.unknown_merge.promote_large_birth else 1
                             tracked_objects[next_id] = Track(
                                 gen=event_gen,
                                 missed=0,
@@ -566,7 +548,7 @@ def track_from_detections_json(video_path, detections_path, output_path, log_pat
                     if tid not in assigned_tracks:
                         reset_merge_candidate_state(track)
                         track.missed += 1
-                        if track.missed > MAX_MISSED_FRAMES:
+                        if track.missed > cfg.max_missed_frames:
                             frame_events.append({
                                 "type": "death",
                                 "track_id": tid,
@@ -577,8 +559,8 @@ def track_from_detections_json(video_path, detections_path, output_path, log_pat
                 for tid in to_remove:
                     tracked_objects.pop(tid, None)
 
-            if DRAW_TRACK_OVERLAY:
-                apply_tracking_overlay(frame, tracked_objects, merged_children)
+            if cfg.render.draw_overlay:
+                apply_tracking_overlay(frame, tracked_objects, merged_children, cfg)
 
             writer.write(frame)
             frame_record_out = {

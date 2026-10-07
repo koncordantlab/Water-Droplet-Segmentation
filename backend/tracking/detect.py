@@ -11,11 +11,7 @@ from typing import List, Optional
 import numpy as np
 from ultralytics import YOLO
 
-from tracking.config import (
-    KEEP_NON_CIRCULAR_FOR_ASSOCIATION,
-    MIN_SEGMENT_CONFIDENCE,
-    REQUIRE_INSTANCE_SEGMENTATION,
-)
+from tracking.config import DEFAULT_CONFIG, TrackingConfig
 from tracking.geometry import detection_area, is_relevant_circular_segment
 from tracking.io import (
     JsonArrayWriter,
@@ -30,7 +26,7 @@ def load_model(model_path: str) -> YOLO:
         raise FileNotFoundError(f"Model not found: {model_path}")
     return YOLO(model_path)
 
-def detections_from_results(results):
+def detections_from_results(results, cfg: TrackingConfig):
     detections = []
     detection_meta = []
     detection_segments: List[Optional[np.ndarray]] = []
@@ -43,7 +39,7 @@ def detections_from_results(results):
     masks_xy = None
     if getattr(results, "masks", None) is not None and getattr(results.masks, "xy", None) is not None:
         masks_xy = results.masks.xy
-    if masks_xy is None and REQUIRE_INSTANCE_SEGMENTATION:
+    if masks_xy is None and cfg.segments.require_segmentation:
         raise RuntimeError("Instance segmentation required, but model returned no masks. Use a segmentation model.")
     if masks_xy is None:
         masks_xy = []
@@ -66,22 +62,22 @@ def detections_from_results(results):
         box = boxes[det_idx] if boxes is not None else None
         conf = float(box.conf[0]) if box is not None and hasattr(box, "conf") else 0.0
         cls = int(box.cls[0]) if box is not None and hasattr(box, "cls") else 0
-        if conf < MIN_SEGMENT_CONFIDENCE:
+        if conf < cfg.segments.min_confidence:
             dropped_low_conf += 1
             continue
         segment = None
         points = np.asarray(mask_points, dtype=np.float32)
         if points.ndim == 2 and points.shape[0] >= 3 and points.shape[1] == 2:
             segment = points
-        if REQUIRE_INSTANCE_SEGMENTATION and segment is None:
+        if cfg.segments.require_segmentation and segment is None:
             dropped_invalid_segment += 1
             continue
         det_area = detection_area(segment)
-        if REQUIRE_INSTANCE_SEGMENTATION and det_area <= 0:
+        if cfg.segments.require_segmentation and det_area <= 0:
             dropped_invalid_area += 1
             continue
-        if segment is not None and not is_relevant_circular_segment(segment):
-            if KEEP_NON_CIRCULAR_FOR_ASSOCIATION:
+        if segment is not None and not is_relevant_circular_segment(segment, cfg):
+            if cfg.segments.keep_non_circular_for_association:
                 kept_non_circular += 1
             else:
                 dropped_non_circular += 1
@@ -99,14 +95,15 @@ def detections_from_results(results):
     ):
         print(
             "Warning: dropped segmented instances "
-            f"(low_conf={dropped_low_conf}, conf_threshold={MIN_SEGMENT_CONFIDENCE}, "
+            f"(low_conf={dropped_low_conf}, conf_threshold={cfg.segments.min_confidence}, "
             f"invalid_segment={dropped_invalid_segment}, invalid_area={dropped_invalid_area}, "
             f"non_circular_dropped={dropped_non_circular}, non_circular_kept={kept_non_circular}, "
             f"kept={len(detections)}, total_masks={len(masks_xy)})"
         )
     return detections, detection_meta, detection_segments, detection_areas
 
-def export_detections_json(model, video_path, detections_path):
+def export_detections_json(model, video_path, detections_path, config: Optional[TrackingConfig] = None):
+    cfg = DEFAULT_CONFIG if config is None else config
     cap, _, _, _ = open_video(video_path)
     ensure_parent_dir(detections_path)
     writer = JsonArrayWriter(detections_path)
@@ -122,7 +119,7 @@ def export_detections_json(model, video_path, detections_path):
             masks_xy = getattr(getattr(results, "masks", None), "xy", None)
             raw_segment_count = int(len(masks_xy)) if masks_xy is not None else 0
             max_raw_segments = max(max_raw_segments, raw_segment_count)
-            detections, detection_meta, detection_segments, detection_areas = detections_from_results(results)
+            detections, detection_meta, detection_segments, detection_areas = detections_from_results(results, cfg)
             max_filtered_segments = max(max_filtered_segments, len(detections))
             det_records = []
             for det_idx, _ in enumerate(detections):
@@ -144,5 +141,5 @@ def export_detections_json(model, video_path, detections_path):
         cap.release()
     print(f"Max raw segmented instances in a frame: {max_raw_segments}")
     print(f"Max kept segmented instances in a frame (after conf/shape filters): {max_filtered_segments}")
-    print(f"Segmentation confidence threshold: {MIN_SEGMENT_CONFIDENCE}")
+    print(f"Segmentation confidence threshold: {cfg.segments.min_confidence}")
     print(f"Detections saved to: {detections_path}")

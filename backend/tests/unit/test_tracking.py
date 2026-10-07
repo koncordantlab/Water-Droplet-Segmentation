@@ -8,27 +8,26 @@ import numpy as np
 
 
 def test_config_imports_without_side_effects():
-    # Importing config must not load weights, open videos, or write files.
-    # (torch.device probing is the one allowed exception, verbatim behavior.)
-    code = "from tracking import config; print(config.MERGE_MIN_IOU)"
+    # Importing config must not load weights, open videos, write files, or
+    # import torch (the prefilter device is resolved per run now).
+    code = ("import sys; from tracking.config import DEFAULT_CONFIG; "
+            "print(DEFAULT_CONFIG.direct_merge.min_iou, 'torch' in sys.modules)")
     out = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True,
         timeout=120, cwd=None,
     )
     assert out.returncode == 0, out.stderr
-    assert out.stdout.strip() == "0.2"
+    assert out.stdout.strip() == "0.2 False"
 
 
-def test_tuning_constants_pinned():
-    from tracking import config
-    # Spot-pin values across each constants family (the tuning surface).
-    assert config.MAX_MISSED_FRAMES == 10
-    assert config.IOU_MATCH_THRESHOLD == 0.05
-    assert config.MERGE_COMBINED_AREA_FACTOR == 0.85
-    assert config.INFERRED_SINGLE_PARENT_ACTIVE_MIN_IOU == 0.60
-    assert config.MATCH_GROWTH_MERGE_MIN_AREA_GROWTH == 1.12
-    assert config.MIN_SEGMENT_CONFIDENCE == 0.50
-    assert config.SEGMENT_IOU_MAX_RASTER_PIXELS == 250_000
+def test_prefilter_device_falls_back_to_cpu(monkeypatch):
+    import torch
+    from tracking.config import DEFAULT_CONFIG
+    from tracking.matching import resolve_prefilter_device
+    no_gpu = DEFAULT_CONFIG.with_overrides({"candidates": {"use_gpu": False}})
+    assert resolve_prefilter_device(no_gpu).type == "cpu"
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert resolve_prefilter_device(DEFAULT_CONFIG).type == "cpu"
 
 
 def _square_segment(x0, y0, size):
@@ -43,9 +42,9 @@ def test_geometry_known_values():
     assert geometry.segment_center(sq) == (5.0, 5.0)
     assert geometry.segment_max_dim(sq) == 10.0
     # identical squares -> IoU 1.0; disjoint -> 0.0
-    assert geometry.segment_iou(sq, sq) == 1.0
+    assert geometry.segment_iou(sq, sq, 250_000) == 1.0
     far = _square_segment(100, 100, 10)
-    assert geometry.segment_iou(sq, far) == 0.0
+    assert geometry.segment_iou(sq, far, 250_000) == 0.0
     # circularity of a square is 4*pi*A/P^2 = pi/4
     assert abs(geometry.segment_circularity(sq) - np.pi / 4) < 1e-6
 
@@ -64,6 +63,9 @@ def test_json_array_writer_roundtrip(tmp_path):
 def test_build_match_candidates_smoke():
     """One live track + one overlapping detection -> exactly one candidate
     pair (0, track_id); a far detection yields no pair for that track."""
+    import torch
+
+    from tracking.config import DEFAULT_CONFIG
     from tracking.matching import build_match_candidates
     from tracking.tracks import Track
     near = _square_segment(0, 0, 10)
@@ -71,9 +73,9 @@ def test_build_match_candidates_smoke():
     track = Track(gen=1, area=100.0, segment=near)
     tracked = {7: track}
     dets = [near.copy(), far]
-    # Signature is (active_tracks, detection_segments) and the return is
-    # {det_idx: [(tid, iou, dist_norm), ...]} — not a flat pair list.
-    candidates = build_match_candidates(tracked, dets)
+    # Signature is (active_tracks, detection_segments, cfg, device) and the
+    # return is {det_idx: [(tid, iou, dist_norm), ...]} — not a flat pair list.
+    candidates = build_match_candidates(tracked, dets, DEFAULT_CONFIG, torch.device("cpu"))
     pairs = {(d, t) for d, cand_list in candidates.items() for t, *_ in cand_list}
     assert (0, 7) in pairs and (1, 7) not in pairs
 

@@ -1,18 +1,14 @@
 """Pure segment/box geometry: areas, centers, bounds, circularity filters,
 rasterized segment IoU, and the torch bbox-IoU prefilter kernel. Verbatim
 from the monolith."""
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 
 import cv2
 import numpy as np
 import torch
 
-from tracking.config import (
-    FILTER_NON_CIRCULAR_SEGMENTS,
-    MIN_SEGMENT_AXIS_RATIO,
-    MIN_SEGMENT_CIRCULARITY,
-    SEGMENT_IOU_MAX_RASTER_PIXELS,
-)
+if TYPE_CHECKING:
+    from tracking.config import TrackingConfig
 
 def segment_area(segment: Optional[np.ndarray]) -> float:
     if segment is None:
@@ -80,14 +76,14 @@ def segment_axis_ratio(segment: Optional[np.ndarray]) -> float:
     h = max(1.0, y_max - y_min)
     return float(min(w, h) / max(w, h))
 
-def is_relevant_circular_segment(segment: Optional[np.ndarray]) -> bool:
-    if not FILTER_NON_CIRCULAR_SEGMENTS:
+def is_relevant_circular_segment(segment: Optional[np.ndarray], cfg: "TrackingConfig") -> bool:
+    if not cfg.segments.filter_non_circular:
         return True
     circularity = segment_circularity(segment)
-    if circularity < MIN_SEGMENT_CIRCULARITY:
+    if circularity < cfg.segments.min_circularity:
         return False
     axis_ratio = segment_axis_ratio(segment)
-    if axis_ratio < MIN_SEGMENT_AXIS_RATIO:
+    if axis_ratio < cfg.segments.min_axis_ratio:
         return False
     return True
 
@@ -108,7 +104,7 @@ def _rasterized_segment_mask(
     cv2.fillPoly(mask, [pts.reshape(-1, 1, 2)], 1)
     return mask
 
-def segment_iou(seg_a: Optional[np.ndarray], seg_b: Optional[np.ndarray]) -> Optional[float]:
+def segment_iou(seg_a: Optional[np.ndarray], seg_b: Optional[np.ndarray], max_raster_pixels: int) -> Optional[float]:
     if seg_a is None or seg_b is None:
         return None
     if seg_a.ndim != 2 or seg_b.ndim != 2:
@@ -125,8 +121,8 @@ def segment_iou(seg_a: Optional[np.ndarray], seg_b: Optional[np.ndarray]) -> Opt
     height = max(1, int(np.ceil(max_y - min_y)) + 1)
     pixel_count = width * height
     scale = 1.0
-    if pixel_count > SEGMENT_IOU_MAX_RASTER_PIXELS:
-        scale = float(np.sqrt(pixel_count / SEGMENT_IOU_MAX_RASTER_PIXELS))
+    if pixel_count > max_raster_pixels:
+        scale = float(np.sqrt(pixel_count / max_raster_pixels))
         width = max(1, int(np.ceil(width / scale)))
         height = max(1, int(np.ceil(height / scale)))
 

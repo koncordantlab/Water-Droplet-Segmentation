@@ -6,72 +6,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import torch
 
-from tracking.config import (
-    ACTIVE_TRACK_MAX_DIST_NORM,
-    ACTIVE_TRACK_MIN_IOU,
-    ADAPTIVE_GROWTH_BASELINE_MIN_SAMPLES,
-    ADAPTIVE_GROWTH_MAD_MULTIPLIER,
-    ADAPTIVE_GROWTH_MIN_THRESHOLD,
-    DIST_MATCH_FACTOR,
-    GROWTH_CONTINUATION_MAX_DIST_NORM,
-    GROWTH_CONTINUATION_MIN_IOU,
-    INFERRED_MERGE_ANCHOR_MAX_DIST_NORM,
-    INFERRED_MERGE_ANCHOR_MIN_IOU,
-    INFERRED_MERGE_AREA_FACTOR,
-    INFERRED_MERGE_COMBINED_AREA_FACTOR,
-    INFERRED_MERGE_LOST_PARENT_MAX_EFFECTIVE_MISSED,
-    INFERRED_MERGE_MAX_DIST_NORM,
-    INFERRED_MERGE_MAX_MISSED,
-    INFERRED_MERGE_MIN_IOU,
-    INFERRED_MERGE_MIN_PARENTS,
-    INFERRED_MERGE_PARENT_MAX_DIST_NORM,
-    INFERRED_MERGE_REQUIRE_LOST_PARENT,
-    INFERRED_SINGLE_PARENT_ACTIVE_MAX_DIST_NORM,
-    INFERRED_SINGLE_PARENT_ACTIVE_MIN_AREA_GROWTH,
-    INFERRED_SINGLE_PARENT_ACTIVE_MIN_IOU,
-    INFERRED_SINGLE_PARENT_GROWTH_ONLY_IOU,
-    INFERRED_SINGLE_PARENT_GROWTH_ONLY_MAX_DIST_NORM,
-    INFERRED_SINGLE_PARENT_LOST_MAX_DIST_NORM,
-    INFERRED_SINGLE_PARENT_LOST_MAX_EFFECTIVE_MISSED,
-    INFERRED_SINGLE_PARENT_LOST_MIN_IOU,
-    INFERRED_SINGLE_PARENT_MAX_DIST_NORM,
-    INFERRED_SINGLE_PARENT_MAX_EFFECTIVE_MISSED,
-    INFERRED_SINGLE_PARENT_MIN_AREA_GROWTH,
-    INFERRED_SINGLE_PARENT_MIN_IOU,
-    INFERRED_UNKNOWN_BIRTH_MEDIAN_FACTOR,
-    INFERRED_UNKNOWN_MATCH_AREA_GROWTH,
-    IOU_MATCH_THRESHOLD,
-    LOST_TRACK_MAX_DIST_NORM,
-    LOST_TRACK_MIN_IOU,
-    LOST_TRACK_RECOVERY_MAX_DIST_NORM,
-    LOST_TRACK_RECOVERY_MIN_IOU,
-    MATCH_GROWTH_MERGE_MAX_EFFECTIVE_MISSED,
-    MATCH_GROWTH_MERGE_MAX_EXTRA_PARENTS,
-    MATCH_GROWTH_MERGE_MIN_AREA_GROWTH,
-    MATCH_GROWTH_MERGE_PARENT_AREA_FACTOR,
-    MATCH_GROWTH_MERGE_STALE_STRONG_MAX_DIST_NORM,
-    MATCH_GROWTH_MERGE_STALE_STRONG_MIN_IOU,
-    MATCH_GROWTH_MERGE_STRONG_MAX_DIST_NORM,
-    MATCH_GROWTH_MERGE_STRONG_MIN_IOU,
-    MATCH_GROWTH_MERGE_SUPPORT_MAX_DIST_NORM,
-    MATCH_GROWTH_MERGE_SUPPORT_SCORE_MARGIN,
-    MAX_MATCH_AREA_RATIO,
-    MAX_RELIABLE_MATCH_DIST_NORM,
-    MAX_UNKNOWN_PARENT_COUNT_ESTIMATE,
-    MERGE_AREA_FACTOR,
-    MERGE_COMBINED_AREA_FACTOR,
-    MERGE_MAX_DIST_NORM,
-    MERGE_MAX_PARENT_PAIR_DIST_NORM,
-    MERGE_MIN_COMBINED_PARENT_IOU,
-    MERGE_MIN_IOU,
-    MERGE_PARENT_DIST_FACTOR,
-    MERGE_SECOND_PARENT_MAX_DIST_NORM,
-    MERGE_SECOND_PARENT_MIN_IOU,
-    MIN_RELIABLE_MATCH_IOU,
-    TRACKING_PREFILTER_DEVICE,
-    TRACKING_PREFILTER_MAX_CANDIDATES_PER_DET,
-    UNKNOWN_MERGE_BASELINE_MIN_TRACKS,
-)
+from tracking.config import TrackingConfig
 from tracking.geometry import (
     _bbox_iou_matrix_torch,
     segment_bounds,
@@ -83,9 +18,16 @@ from tracking.geometry import (
 )
 from tracking.tracks import Track
 
+def resolve_prefilter_device(cfg: TrackingConfig) -> torch.device:
+    """CUDA when cfg.candidates.use_gpu and a GPU is present, else CPU (the
+    legacy TRACKING_PREFILTER_DEVICE, now resolved per run instead of at import)."""
+    return torch.device("cuda" if cfg.candidates.use_gpu and torch.cuda.is_available() else "cpu")
+
 def build_match_candidates(
     active_tracks: Dict[int, Track],
     detection_segments: List[Optional[np.ndarray]],
+    cfg: TrackingConfig,
+    device: torch.device,
 ) -> Dict[int, List[Tuple[int, float, float]]]:
     """Build candidate pairs using GPU/CPU tensor prefilter before exact segment IoU."""
     candidates: Dict[int, List[Tuple[int, float, float]]] = {i: [] for i in range(len(detection_segments))}
@@ -118,7 +60,6 @@ def build_match_candidates(
     det_dims = np.asarray([segment_max_dim(seg) for seg in valid_det_segments], dtype=np.float32)
     det_bounds = np.asarray([segment_bounds(seg) for seg in valid_det_segments], dtype=np.float32)
 
-    device = TRACKING_PREFILTER_DEVICE
     with torch.no_grad():
         t_centers = torch.as_tensor(track_centers, device=device)
         d_centers = torch.as_tensor(det_centers, device=device)
@@ -131,7 +72,7 @@ def build_match_candidates(
         denom = torch.maximum(t_dims[:, None], d_dims[None, :]).clamp_min(1.0)
         dist_norm = dist / denom
         bbox_iou = _bbox_iou_matrix_torch(t_bounds, d_bounds)
-        pre_mask = torch.logical_or(bbox_iou >= IOU_MATCH_THRESHOLD, dist_norm <= DIST_MATCH_FACTOR)
+        pre_mask = torch.logical_or(bbox_iou >= cfg.candidates.iou_threshold, dist_norm <= cfg.candidates.dist_factor)
 
         dist_norm_cpu = dist_norm.cpu().numpy()
         pre_mask_cpu = pre_mask.cpu().numpy()
@@ -142,10 +83,10 @@ def build_match_candidates(
             continue
 
         if (
-            TRACKING_PREFILTER_MAX_CANDIDATES_PER_DET > 0
-            and row_indices.size > TRACKING_PREFILTER_MAX_CANDIDATES_PER_DET
+            cfg.candidates.max_per_detection > 0
+            and row_indices.size > cfg.candidates.max_per_detection
         ):
-            order = np.argsort(dist_norm_cpu[row_indices, col])[:TRACKING_PREFILTER_MAX_CANDIDATES_PER_DET]
+            order = np.argsort(dist_norm_cpu[row_indices, col])[:cfg.candidates.max_per_detection]
             row_indices = row_indices[order]
 
         det_segment = valid_det_segments[col]
@@ -153,9 +94,9 @@ def build_match_candidates(
         for row in row_indices:
             tid = track_ids[row]
             track = active_tracks[tid]
-            iou = effective_match_iou(track, det_segment)
+            iou = effective_match_iou(track, det_segment, cfg)
             dist_norm_val = float(dist_norm_cpu[row, col])
-            if iou >= IOU_MATCH_THRESHOLD or dist_norm_val <= DIST_MATCH_FACTOR:
+            if iou >= cfg.candidates.iou_threshold or dist_norm_val <= cfg.candidates.dist_factor:
                 det_candidates.append((tid, iou, dist_norm_val))
 
         det_candidates.sort(key=lambda item: (-item[1], item[2]))
@@ -169,6 +110,7 @@ def select_merge_parents(
     cand_list: List[Tuple[int, float, float]],
     active_tracks: Dict[int, Track],
     assigned_tracks: set,
+    cfg: TrackingConfig,
 ) -> List[int]:
     """Return exactly two parent track IDs when a merge hypothesis is strong enough."""
     if len(cand_list) < 2:
@@ -179,15 +121,15 @@ def select_merge_parents(
     for tid, iou, dist_norm in cand_list:
         if tid in assigned_tracks:
             continue
-        if iou < MERGE_MIN_IOU or dist_norm > MERGE_MAX_DIST_NORM:
+        if iou < cfg.direct_merge.min_iou or dist_norm > cfg.direct_merge.max_dist_norm:
             continue
 
         parent_area = active_tracks[tid].area
-        if det_area < MERGE_AREA_FACTOR * parent_area:
+        if det_area < cfg.direct_merge.area_factor * parent_area:
             continue
 
         parent_det_dist = segment_distance(active_tracks[tid].segment, det_segment)
-        if parent_det_dist > MERGE_PARENT_DIST_FACTOR * max_det_dim:
+        if parent_det_dist > cfg.direct_merge.parent_dist_factor * max_det_dim:
             continue
 
         strong_candidates.append((tid, iou, parent_area, dist_norm))
@@ -204,7 +146,7 @@ def select_merge_parents(
             selected.append(candidate)
             combined_parent_area = parent_area
             continue
-        if det_area >= MERGE_COMBINED_AREA_FACTOR * (combined_parent_area + parent_area):
+        if det_area >= cfg.direct_merge.combined_area_factor * (combined_parent_area + parent_area):
             selected.append(candidate)
             combined_parent_area += parent_area
 
@@ -215,11 +157,11 @@ def select_merge_parents(
     second_parent_iou = selected[1][1]
     second_parent_dist_norm = selected[1][3]
     if (
-        second_parent_iou < MERGE_SECOND_PARENT_MIN_IOU
-        and second_parent_dist_norm > MERGE_SECOND_PARENT_MAX_DIST_NORM
+        second_parent_iou < cfg.direct_merge.second_parent_min_iou
+        and second_parent_dist_norm > cfg.direct_merge.second_parent_max_dist_norm
     ):
         return []
-    if (selected[0][1] + selected[1][1]) < MERGE_MIN_COMBINED_PARENT_IOU:
+    if (selected[0][1] + selected[1][1]) < cfg.direct_merge.min_combined_parent_iou:
         return []
 
     # Parents must be reasonably close to each other for a true merge.
@@ -230,7 +172,7 @@ def select_merge_parents(
         segment_max_dim(seg_a),
         segment_max_dim(seg_b),
     )
-    if parent_pair_dist_norm > MERGE_MAX_PARENT_PAIR_DIST_NORM:
+    if parent_pair_dist_norm > cfg.direct_merge.max_parent_pair_dist_norm:
         return []
 
     return [item[0] for item in selected]
@@ -241,6 +183,7 @@ def select_inferred_merge_parents(
     tracked_objects: Dict[int, Track],
     assigned_tracks: set,
     merged_parents: set,
+    cfg: TrackingConfig,
     allow_single_parent: bool = True,
 ) -> List[int]:
     """Find recently lost tracks that likely formed a larger merged detection.
@@ -255,23 +198,23 @@ def select_inferred_merge_parents(
             continue
         was_lost = track.missed > 0
         effective_missed = track.missed + 1
-        if effective_missed > INFERRED_MERGE_MAX_MISSED:
+        if effective_missed > cfg.inferred_max_missed:
             continue
-        if was_lost and effective_missed > INFERRED_MERGE_LOST_PARENT_MAX_EFFECTIVE_MISSED:
+        if was_lost and effective_missed > cfg.inferred_merge.lost_parent_max_effective_missed:
             continue
 
         parent_area = track.area
-        if det_area < INFERRED_MERGE_AREA_FACTOR * parent_area:
+        if det_area < cfg.inferred_merge.area_factor * parent_area:
             continue
 
-        iou = effective_match_iou(track, det_segment)
+        iou = effective_match_iou(track, det_segment, cfg)
         dist_norm = segment_distance_norm(track.segment, det_segment)
-        if iou < INFERRED_MERGE_MIN_IOU and dist_norm > min(INFERRED_MERGE_MAX_DIST_NORM, INFERRED_MERGE_PARENT_MAX_DIST_NORM):
+        if iou < cfg.inferred_merge.min_iou and dist_norm > min(cfg.inferred_merge.max_dist_norm, cfg.inferred_merge.parent_max_dist_norm):
             continue
 
         candidates.append((tid, effective_missed, dist_norm, iou, parent_area, was_lost))
 
-    if len(candidates) < INFERRED_MERGE_MIN_PARENTS:
+    if len(candidates) < cfg.inferred_merge.min_parents:
         return []
 
     # Prefer already-lost parents over currently active unmatched tracks.
@@ -284,7 +227,7 @@ def select_inferred_merge_parents(
             chosen.append(candidate)
             combined_parent_area = parent_area
             continue
-        if det_area >= INFERRED_MERGE_COMBINED_AREA_FACTOR * (combined_parent_area + parent_area):
+        if det_area >= cfg.inferred_merge.combined_area_factor * (combined_parent_area + parent_area):
             chosen.append(candidate)
             combined_parent_area += parent_area
 
@@ -293,9 +236,9 @@ def select_inferred_merge_parents(
 
     # Multi-parent inferred merge.
     if len(chosen) >= 2:
-        if INFERRED_MERGE_REQUIRE_LOST_PARENT and not any(item[5] for item in chosen):
+        if cfg.inferred_merge.require_lost_parent and not any(item[5] for item in chosen):
             return []
-        if not any(item[3] >= INFERRED_MERGE_ANCHOR_MIN_IOU or item[2] <= INFERRED_MERGE_ANCHOR_MAX_DIST_NORM for item in chosen):
+        if not any(item[3] >= cfg.inferred_merge.anchor_min_iou or item[2] <= cfg.inferred_merge.anchor_max_dist_norm for item in chosen):
             return []
         return [item[0] for item in chosen]
 
@@ -308,35 +251,35 @@ def select_inferred_merge_parents(
     single_parent_iou = chosen[0][3]
     single_parent_dist_norm = chosen[0][2]
     single_parent_was_lost = chosen[0][5]
-    if det_area < INFERRED_SINGLE_PARENT_MIN_AREA_GROWTH * single_parent_area:
+    if det_area < cfg.single_parent.min_area_growth * single_parent_area:
         return []
     # Avoid reviving very old lost tracks as self-only inferred merges.
-    if single_parent_effective_missed > INFERRED_SINGLE_PARENT_MAX_EFFECTIVE_MISSED:
+    if single_parent_effective_missed > cfg.single_parent.max_effective_missed:
         return []
     if (
         single_parent_was_lost
-        and single_parent_effective_missed > INFERRED_SINGLE_PARENT_LOST_MAX_EFFECTIVE_MISSED
+        and single_parent_effective_missed > cfg.single_parent.lost_max_effective_missed
     ):
         return []
     if single_parent_was_lost and (
-        single_parent_iou < INFERRED_SINGLE_PARENT_LOST_MIN_IOU
-        or single_parent_dist_norm > INFERRED_SINGLE_PARENT_LOST_MAX_DIST_NORM
+        single_parent_iou < cfg.single_parent.lost_min_iou
+        or single_parent_dist_norm > cfg.single_parent.lost_max_dist_norm
     ):
         return []
-    if single_parent_iou < INFERRED_SINGLE_PARENT_MIN_IOU and single_parent_dist_norm > INFERRED_SINGLE_PARENT_MAX_DIST_NORM:
+    if single_parent_iou < cfg.single_parent.min_iou and single_parent_dist_norm > cfg.single_parent.max_dist_norm:
         return []
     if not single_parent_was_lost:
-        if det_area < INFERRED_SINGLE_PARENT_ACTIVE_MIN_AREA_GROWTH * single_parent_area:
+        if det_area < cfg.single_parent.active_min_area_growth * single_parent_area:
             return []
         if (
-            single_parent_iou < INFERRED_SINGLE_PARENT_ACTIVE_MIN_IOU
-            or single_parent_dist_norm > INFERRED_SINGLE_PARENT_ACTIVE_MAX_DIST_NORM
+            single_parent_iou < cfg.single_parent.active_min_iou
+            or single_parent_dist_norm > cfg.single_parent.active_max_dist_norm
         ):
             return []
     # High-overlap, tiny-motion growth is usually a single-object size change, not a merge.
     if (
-        single_parent_iou >= INFERRED_SINGLE_PARENT_GROWTH_ONLY_IOU
-        and single_parent_dist_norm <= INFERRED_SINGLE_PARENT_GROWTH_ONLY_MAX_DIST_NORM
+        single_parent_iou >= cfg.single_parent.growth_only_min_iou
+        and single_parent_dist_norm <= cfg.single_parent.growth_only_max_dist_norm
     ):
         return []
 
@@ -352,6 +295,7 @@ def select_match_growth_merge_support_parents(
     merged_parents: set,
     cand_list_for_det: List[Tuple[int, float, float]],
     best_det_for_track: Dict[int, Tuple[int, float]],
+    cfg: TrackingConfig,
 ) -> List[int]:
     """Find additional parent tracks that compete for the same grown detection."""
     candidates: List[Tuple[int, float, float, int, float]] = []
@@ -365,24 +309,24 @@ def select_match_growth_merge_support_parents(
             continue
         effective_missed = track.missed + 1
         # Keep a broader temporal window, but penalize stale candidates by score.
-        if effective_missed > INFERRED_MERGE_MAX_MISSED:
+        if effective_missed > cfg.inferred_max_missed:
             continue
-        if track.area <= 0 or det_area < (MATCH_GROWTH_MERGE_PARENT_AREA_FACTOR * track.area):
+        if track.area <= 0 or det_area < (cfg.growth_rescue.parent_area_factor * track.area):
             continue
         best = best_det_for_track.get(sid)
         if best is not None and best[0] != det_idx:
             score_here = iou - 0.1 * dist_norm
             # Relax near-best requirement when growth is strong and support is spatially plausible.
             allow_competing = (
-                det_area >= ((MATCH_GROWTH_MERGE_PARENT_AREA_FACTOR + 0.10) * track.area)
-                and dist_norm <= MATCH_GROWTH_MERGE_STRONG_MAX_DIST_NORM
+                det_area >= ((cfg.growth_rescue.parent_area_factor + 0.10) * track.area)
+                and dist_norm <= cfg.growth_rescue.strong_max_dist_norm
             )
-            if not allow_competing and score_here + MATCH_GROWTH_MERGE_SUPPORT_SCORE_MARGIN < best[1]:
+            if not allow_competing and score_here + cfg.growth_rescue.support_score_margin < best[1]:
                 continue
-        if iou < MIN_RELIABLE_MATCH_IOU and dist_norm > MATCH_GROWTH_MERGE_SUPPORT_MAX_DIST_NORM:
+        if iou < cfg.match.reliable_min_iou and dist_norm > cfg.growth_rescue.support_max_dist_norm:
             continue
         area_ratio = area_growth_ratio(track.area, det_area)
-        score = support_parent_score(iou, dist_norm, area_ratio, effective_missed)
+        score = support_parent_score(iou, dist_norm, area_ratio, effective_missed, cfg)
         if score <= 0.0:
             continue
         candidates.append((sid, iou, dist_norm, effective_missed, score))
@@ -395,13 +339,13 @@ def select_match_growth_merge_support_parents(
     top_dist_norm = candidates[0][2]
     top_effective_missed = candidates[0][3]
     top_score = candidates[0][4]
-    if top_iou < MATCH_GROWTH_MERGE_STRONG_MIN_IOU and top_dist_norm > MATCH_GROWTH_MERGE_STRONG_MAX_DIST_NORM:
+    if top_iou < cfg.growth_rescue.strong_min_iou and top_dist_norm > cfg.growth_rescue.strong_max_dist_norm:
         return []
     if (
-        top_effective_missed >= MATCH_GROWTH_MERGE_MAX_EFFECTIVE_MISSED
+        top_effective_missed >= cfg.growth_rescue.max_effective_missed
         and (
-            top_iou < MATCH_GROWTH_MERGE_STALE_STRONG_MIN_IOU
-            or top_dist_norm > MATCH_GROWTH_MERGE_STALE_STRONG_MAX_DIST_NORM
+            top_iou < cfg.growth_rescue.stale_strong_min_iou
+            or top_dist_norm > cfg.growth_rescue.stale_strong_max_dist_norm
         )
     ):
         return []
@@ -411,11 +355,11 @@ def select_match_growth_merge_support_parents(
     if not selected:
         return []
 
-    max_extra = max(1, MATCH_GROWTH_MERGE_MAX_EXTRA_PARENTS)
+    max_extra = max(1, cfg.growth_rescue.max_extra_parents)
     return [item[0] for item in selected[:max_extra]]
 
 
-def reference_object_area(tracked_objects: Dict[int, Track], frame_median_area: float) -> float:
+def reference_object_area(tracked_objects: Dict[int, Track], frame_median_area: float, cfg: TrackingConfig) -> float:
     """Estimate typical single-object area from stable active tracks."""
     stable_areas = []
     for track in tracked_objects.values():
@@ -425,7 +369,7 @@ def reference_object_area(tracked_objects: Dict[int, Track], frame_median_area: 
         if area > 0:
             stable_areas.append(area)
 
-    if len(stable_areas) >= UNKNOWN_MERGE_BASELINE_MIN_TRACKS:
+    if len(stable_areas) >= cfg.unknown_merge.baseline_min_tracks:
         return float(np.median(stable_areas))
 
     if frame_median_area > 0:
@@ -453,6 +397,7 @@ def estimate_adaptive_growth_threshold(
     scored_pairs: List[Tuple[float, int, int, float, float]],
     tracked_objects: Dict[int, Track],
     detection_areas: List[float],
+    cfg: TrackingConfig,
 ) -> float:
     """Estimate growth threshold from likely continuation matches in the current frame."""
     best_per_track: Dict[int, Tuple[int, float, float]] = {}
@@ -462,7 +407,7 @@ def estimate_adaptive_growth_threshold(
 
     baseline_growth: List[float] = []
     for tid, (det_idx, iou, dist_norm) in best_per_track.items():
-        if iou < ACTIVE_TRACK_MIN_IOU or dist_norm > ACTIVE_TRACK_MAX_DIST_NORM:
+        if iou < cfg.match.active_min_iou or dist_norm > cfg.match.active_max_dist_norm:
             continue
         if det_idx >= len(detection_areas):
             continue
@@ -476,12 +421,12 @@ def estimate_adaptive_growth_threshold(
         if np.isfinite(ratio) and ratio > 0:
             baseline_growth.append(float(ratio))
 
-    if len(baseline_growth) < ADAPTIVE_GROWTH_BASELINE_MIN_SAMPLES:
-        return MATCH_GROWTH_MERGE_MIN_AREA_GROWTH
+    if len(baseline_growth) < cfg.adaptive_growth.min_samples:
+        return cfg.adaptive_growth.fallback_threshold
 
     arr = np.asarray(baseline_growth, dtype=np.float32)
     median_growth, mad_growth = robust_median_mad(baseline_growth)
-    robust_tail = median_growth + (ADAPTIVE_GROWTH_MAD_MULTIPLIER * max(mad_growth, 0.01))
+    robust_tail = median_growth + (cfg.adaptive_growth.mad_multiplier * max(mad_growth, 0.01))
     p97_tail = float(np.quantile(arr, 0.97))
     p99_tail = float(np.quantile(arr, 0.99))
     adaptive = max(
@@ -489,45 +434,48 @@ def estimate_adaptive_growth_threshold(
         p97_tail + 0.015,
         p99_tail + 0.008,
     )
-    adaptive = max(ADAPTIVE_GROWTH_MIN_THRESHOLD, adaptive)
-    adaptive = min(adaptive, INFERRED_UNKNOWN_MATCH_AREA_GROWTH)
+    adaptive = max(cfg.adaptive_growth.min_threshold, adaptive)
+    adaptive = min(adaptive, cfg.unknown_merge.match_area_growth)
     return float(adaptive)
 
-def support_parent_score(iou: float, dist_norm: float, area_ratio: float, effective_missed: int) -> float:
+def support_parent_score(iou: float, dist_norm: float, area_ratio: float, effective_missed: int,
+                         cfg: TrackingConfig) -> float:
     """Score competing parent support with soft penalties for stale tracks."""
     overlap_score = max(0.0, min(1.0, iou))
-    dist_score = max(0.0, 1.0 - (dist_norm / max(MATCH_GROWTH_MERGE_SUPPORT_MAX_DIST_NORM, 1e-6)))
-    area_score = max(0.0, min(1.0, (area_ratio - MATCH_GROWTH_MERGE_PARENT_AREA_FACTOR) / 0.35))
+    dist_score = max(0.0, 1.0 - (dist_norm / max(cfg.growth_rescue.support_max_dist_norm, 1e-6)))
+    area_score = max(0.0, min(1.0, (area_ratio - cfg.growth_rescue.parent_area_factor) / 0.35))
     stale_penalty = min(0.55, 0.10 * max(0, effective_missed - 1))
     return (0.60 * overlap_score) + (0.25 * dist_score) + (0.15 * area_score) - stale_penalty
 
 def is_unknown_merge_from_match(
     prev_area: float,
     new_area: float,
+    cfg: TrackingConfig,
     growth_threshold: Optional[float] = None,
 ) -> Tuple[bool, float]:
     ratio = area_growth_ratio(prev_area, new_area)
-    threshold = INFERRED_UNKNOWN_MATCH_AREA_GROWTH if growth_threshold is None else growth_threshold
+    threshold = cfg.unknown_merge.match_area_growth if growth_threshold is None else growth_threshold
     return ratio >= threshold, ratio
 
-def is_unknown_merge_from_birth(det_area: float, reference_area: float) -> Tuple[bool, float]:
+def is_unknown_merge_from_birth(det_area: float, reference_area: float, cfg: TrackingConfig) -> Tuple[bool, float]:
     if reference_area <= 0:
         return False, 0.0
     ratio = det_area / reference_area
-    return ratio >= INFERRED_UNKNOWN_BIRTH_MEDIAN_FACTOR, ratio
+    return ratio >= cfg.unknown_merge.birth_median_factor, ratio
 
 def area_ratio_values(area_a: float, area_b: float) -> float:
     if area_a <= 0 or area_b <= 0:
         return float("inf")
     return max(area_a, area_b) / min(area_a, area_b)
 
-def is_local_growth_continuation(iou: float, dist_norm: float) -> bool:
-    return iou >= GROWTH_CONTINUATION_MIN_IOU and dist_norm <= GROWTH_CONTINUATION_MAX_DIST_NORM
+def is_local_growth_continuation(iou: float, dist_norm: float, cfg: TrackingConfig) -> bool:
+    return iou >= cfg.match.continuation_min_iou and dist_norm <= cfg.match.continuation_max_dist_norm
 
 def estimate_unknown_parent_count(
     det_area: float,
     known_parent_ids: List[int],
     tracked_objects: Dict[int, Track],
+    cfg: TrackingConfig,
 ) -> int:
     if len(known_parent_ids) != 1:
         return 0
@@ -540,38 +488,38 @@ def estimate_unknown_parent_count(
         return 0
 
     ratio = det_area / parent_area
-    if ratio < INFERRED_SINGLE_PARENT_MIN_AREA_GROWTH:
+    if ratio < cfg.single_parent.min_area_growth:
         return 0
 
     estimated = max(1, int(np.floor(ratio)) - 1)
-    return min(MAX_UNKNOWN_PARENT_COUNT_ESTIMATE, estimated)
+    return min(cfg.inferred_merge.max_unknown_parent_estimate, estimated)
 
-def is_reliable_match(iou: float, dist_norm: float) -> bool:
-    return iou >= MIN_RELIABLE_MATCH_IOU or dist_norm <= MAX_RELIABLE_MATCH_DIST_NORM
+def is_reliable_match(iou: float, dist_norm: float, cfg: TrackingConfig) -> bool:
+    return iou >= cfg.match.reliable_min_iou or dist_norm <= cfg.match.reliable_max_dist_norm
 
-def is_valid_match(track: Track, det_area: float, iou: float, dist_norm: float) -> bool:
+def is_valid_match(track: Track, det_area: float, iou: float, dist_norm: float, cfg: TrackingConfig) -> bool:
     """Conservative match gate to reduce ID carry-over between nearby objects."""
-    if not is_reliable_match(iou, dist_norm):
+    if not is_reliable_match(iou, dist_norm, cfg):
         return False
 
     # For currently visible tracks, require at least moderate overlap.
     if track.missed == 0:
-        if iou < ACTIVE_TRACK_MIN_IOU:
+        if iou < cfg.match.active_min_iou:
             return False
-        if dist_norm > ACTIVE_TRACK_MAX_DIST_NORM and iou < (ACTIVE_TRACK_MIN_IOU + 0.10):
+        if dist_norm > cfg.match.active_max_dist_norm and iou < (cfg.match.active_min_iou + 0.10):
             return False
     else:
-        if iou < LOST_TRACK_MIN_IOU:
+        if iou < cfg.match.lost_min_iou:
             return False
-        if dist_norm > LOST_TRACK_MAX_DIST_NORM:
+        if dist_norm > cfg.match.lost_max_dist_norm:
             return False
-        if track.missed >= 2 and (iou < LOST_TRACK_RECOVERY_MIN_IOU or dist_norm > LOST_TRACK_RECOVERY_MAX_DIST_NORM):
+        if track.missed >= 2 and (iou < cfg.match.recovery_min_iou or dist_norm > cfg.match.recovery_max_dist_norm):
             return False
 
     # Reject drastic size changes as regular matches.
     track_area = track.area
-    if area_ratio_values(track_area, det_area) > MAX_MATCH_AREA_RATIO:
-        if det_area > track_area and is_local_growth_continuation(iou, dist_norm):
+    if area_ratio_values(track_area, det_area) > cfg.match.max_area_ratio:
+        if det_area > track_area and is_local_growth_continuation(iou, dist_norm, cfg):
             return True
         return False
 
@@ -580,8 +528,9 @@ def is_valid_match(track: Track, det_area: float, iou: float, dist_norm: float) 
 def effective_match_iou(
     track: Track,
     det_segment: Optional[np.ndarray],
+    cfg: TrackingConfig,
 ) -> float:
-    seg_iou = segment_iou(track.segment, det_segment)
+    seg_iou = segment_iou(track.segment, det_segment, cfg.segments.iou_max_raster_pixels)
     if seg_iou is None:
         raise RuntimeError("Instance segmentation required for matching, but missing track/detection segment.")
     return float(seg_iou)

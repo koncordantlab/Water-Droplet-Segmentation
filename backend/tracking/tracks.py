@@ -2,14 +2,12 @@
 merge-candidate evidence helpers (reset/decay/register). Verbatim from the
 monolith."""
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 
 import numpy as np
 
-from tracking.config import (
-    PERSISTENT_GROWTH_EVIDENCE_DECAY,
-    PERSISTENT_GROWTH_MAX_FRAME_GAP,
-)
+if TYPE_CHECKING:
+    from tracking.config import TrackingConfig
 
 @dataclass
 class Track:
@@ -28,7 +26,7 @@ def reset_merge_candidate_state(track: Track) -> None:
     track.last_merge_candidate_frame = 0
     track.merge_candidate_peak_area_ratio = 0.0
 
-def decay_merge_candidate_state(track: Track, frame_id: int) -> None:
+def decay_merge_candidate_state(track: Track, frame_id: int, cfg: "TrackingConfig") -> None:
     if track.merge_candidate_score <= 0.0:
         return
     last_frame = track.last_merge_candidate_frame
@@ -38,10 +36,10 @@ def decay_merge_candidate_state(track: Track, frame_id: int) -> None:
     frame_gap = frame_id - last_frame
     if frame_gap <= 0:
         return
-    if frame_gap > PERSISTENT_GROWTH_MAX_FRAME_GAP:
+    if frame_gap > cfg.persistent_growth.max_frame_gap:
         reset_merge_candidate_state(track)
         return
-    track.merge_candidate_score *= PERSISTENT_GROWTH_EVIDENCE_DECAY ** frame_gap
+    track.merge_candidate_score *= cfg.persistent_growth.evidence_decay ** frame_gap
     track.last_merge_candidate_frame = frame_id
     if track.merge_candidate_score < 0.20:
         reset_merge_candidate_state(track)
@@ -51,11 +49,12 @@ def register_merge_candidate(
     frame_id: int,
     growth_ratio: float,
     growth_threshold: float,
+    cfg: "TrackingConfig",
 ) -> Tuple[int, float]:
     """Accumulate growth evidence over short windows (not strictly consecutive frames)."""
     if (
         track.last_merge_candidate_frame > 0
-        and frame_id - track.last_merge_candidate_frame > PERSISTENT_GROWTH_MAX_FRAME_GAP
+        and frame_id - track.last_merge_candidate_frame > cfg.persistent_growth.max_frame_gap
     ):
         reset_merge_candidate_state(track)
 
