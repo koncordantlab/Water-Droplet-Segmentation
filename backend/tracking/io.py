@@ -3,12 +3,16 @@ JSON/CSV serialization of tracking logs. Verbatim from the monolith."""
 import csv
 import json
 import os
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import cv2
 import numpy as np
 
 from tracking.geometry import segment_center
+
+if TYPE_CHECKING:  # typing-only imports
+    from tracking.detections import FrameDetections
+    from tracking.tracks import Track
 
 class JsonArrayWriter:
     def __init__(self, path: str):
@@ -118,3 +122,41 @@ def export_tracking_log_csv(log_json_path: str, csv_path: str) -> None:
                         "reason": event.get("reason", ""),
                     }
                 )
+
+
+def detection_record(dets: "FrameDetections", i: int) -> dict:
+    """One detection as written to detections.json and to every tracking-log frame."""
+    return {
+        "det_id": dets.det_ids[i],
+        "center": serialize_center(dets.segments[i]),
+        "area": float(dets.areas[i]),
+        "segment": serialize_segment(dets.segments[i]),
+        "conf": dets.confs[i],
+        "cls": dets.classes[i],
+    }
+
+
+def track_record(track_id: int, track: "Track") -> dict:
+    return {
+        "track_id": track_id,
+        "gen": track.gen,
+        "center": serialize_center(track.segment),
+        "area": float(track.area),
+        "missed": track.missed,
+        "merge_candidate_streak": track.merge_candidate_streak,
+        "merge_candidate_score": float(track.merge_candidate_score),
+        "last_merge_candidate_frame": int(track.last_merge_candidate_frame),
+        "merge_candidate_peak_area_ratio": float(track.merge_candidate_peak_area_ratio),
+        "status": "active" if track.missed == 0 else "lost",
+        "segment": serialize_segment(track.segment),
+    }
+
+
+def frame_log_record(frame_id: int, dets: "FrameDetections", tracks: dict, events: list) -> dict:
+    """One tracking_log.json element."""
+    return {
+        "frame": frame_id,
+        "detections": [detection_record(dets, i) for i in range(len(dets))],
+        "tracks": [track_record(tid, track) for tid, track in tracks.items()],
+        "events": events,
+    }

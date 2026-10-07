@@ -6,19 +6,19 @@ wrapper swaps in. Importing this module never loads model weights;
 load_model() runs only when the CLI (or a caller) invokes it. Function bodies
 verbatim from the monolith."""
 import os
-from typing import List, Optional
+from typing import Optional
 
 import numpy as np
 from ultralytics import YOLO
 
 from tracking.config import DEFAULT_CONFIG, TrackingConfig
+from tracking.detections import FrameDetections
 from tracking.geometry import detection_area, is_relevant_circular_segment
 from tracking.io import (
     JsonArrayWriter,
+    detection_record,
     ensure_parent_dir,
     open_video,
-    serialize_center,
-    serialize_segment,
 )
 
 def load_model(model_path: str) -> YOLO:
@@ -26,11 +26,8 @@ def load_model(model_path: str) -> YOLO:
         raise FileNotFoundError(f"Model not found: {model_path}")
     return YOLO(model_path)
 
-def detections_from_results(results, cfg: TrackingConfig):
-    detections = []
-    detection_meta = []
-    detection_segments: List[Optional[np.ndarray]] = []
-    detection_areas: List[float] = []
+def detections_from_results(results, cfg: TrackingConfig) -> FrameDetections:
+    dets = FrameDetections()
     dropped_invalid_segment = 0
     dropped_invalid_area = 0
     dropped_low_conf = 0
@@ -82,10 +79,7 @@ def detections_from_results(results, cfg: TrackingConfig):
             else:
                 dropped_non_circular += 1
                 continue
-        detections.append(segment)
-        detection_meta.append((conf, cls, det_idx))
-        detection_segments.append(segment)
-        detection_areas.append(det_area)
+        dets.append(segment, det_area, conf, cls, det_idx)
     if (
         dropped_invalid_segment > 0
         or dropped_invalid_area > 0
@@ -98,9 +92,9 @@ def detections_from_results(results, cfg: TrackingConfig):
             f"(low_conf={dropped_low_conf}, conf_threshold={cfg.segments.min_confidence}, "
             f"invalid_segment={dropped_invalid_segment}, invalid_area={dropped_invalid_area}, "
             f"non_circular_dropped={dropped_non_circular}, non_circular_kept={kept_non_circular}, "
-            f"kept={len(detections)}, total_masks={len(masks_xy)})"
+            f"kept={len(dets)}, total_masks={len(masks_xy)})"
         )
-    return detections, detection_meta, detection_segments, detection_areas
+    return dets
 
 def export_detections_json(model, video_path, detections_path, config: Optional[TrackingConfig] = None):
     cfg = DEFAULT_CONFIG if config is None else config
@@ -119,21 +113,9 @@ def export_detections_json(model, video_path, detections_path, config: Optional[
             masks_xy = getattr(getattr(results, "masks", None), "xy", None)
             raw_segment_count = int(len(masks_xy)) if masks_xy is not None else 0
             max_raw_segments = max(max_raw_segments, raw_segment_count)
-            detections, detection_meta, detection_segments, detection_areas = detections_from_results(results, cfg)
-            max_filtered_segments = max(max_filtered_segments, len(detections))
-            det_records = []
-            for det_idx, _ in enumerate(detections):
-                conf, cls, det_id = detection_meta[det_idx]
-                segment = detection_segments[det_idx] if det_idx < len(detection_segments) else None
-                det_area = detection_areas[det_idx] if det_idx < len(detection_areas) else detection_area(segment)
-                det_records.append({
-                    "det_id": det_id,
-                    "center": serialize_center(segment),
-                    "area": float(det_area),
-                    "segment": serialize_segment(segment),
-                    "conf": conf,
-                    "cls": cls,
-                })
+            dets = detections_from_results(results, cfg)
+            max_filtered_segments = max(max_filtered_segments, len(dets))
+            det_records = [detection_record(dets, i) for i in range(len(dets))]
             writer.write({"frame": frame_id, "detections": det_records})
             frame_id += 1
     finally:
