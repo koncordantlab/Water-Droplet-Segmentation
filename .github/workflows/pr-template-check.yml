@@ -1,0 +1,41 @@
+name: PR template
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+# Read-only: the job's own pass/fail status is the enforcement signal.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (!pr) { core.info('not a pull_request payload'); return; }
+            // Bots (Dependabot version bumps) write their own bodies.
+            if (pr.user.login.endsWith('[bot]')) {
+              core.info(`bot PR (${pr.user.login}) - template not required`);
+              return;
+            }
+            // Drafts may stay incomplete; the check re-runs on ready_for_review.
+            if (pr.draft) { core.info('draft PR - template check deferred'); return; }
+            const body = pr.body || '';
+            const problems = [];
+            for (const heading of ['## Summary', '## Changes', '## Verification', '## Checklist']) {
+              if (!body.includes(heading)) problems.push(`missing template section: ${heading}`);
+            }
+            const unchecked = [...body.matchAll(/^\s*[-*] \[ \] .+$/gm)].map(m => m[0].trim());
+            for (const item of unchecked) problems.push(`unchecked: ${item}`);
+            if (problems.length) {
+              core.setFailed(
+                'PR body does not satisfy the template (tick every box - use N/A with a reason ' +
+                'where a step does not apply - and keep all sections):\n- ' + problems.join('\n- '));
+            } else {
+              core.info('PR template satisfied: all sections present, every checkbox ticked.');
+            }
