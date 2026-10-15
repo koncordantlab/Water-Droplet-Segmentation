@@ -6,7 +6,7 @@ const buildPercentageFigure = (c, sliderValue) => {
     const x = sliceIdx(c.pct.x);
     const water = sliceIdx(c.pct.water);
     const ice = sliceIdx(c.pct.ice);
-    const layout = { title: `Water & Ice (%) (first ${sliderValue} frames)`, margin: { t: 40 } };
+    const layout = { title: { text: `Water & Ice (%) (first ${sliderValue} frames)` }, margin: { t: 40 } };
     if (Array.isArray(x) && x.length > 0) layout.xaxis = { range: [x[0], x[x.length - 1]] };
     return {
       data: [
@@ -14,7 +14,8 @@ const buildPercentageFigure = (c, sliderValue) => {
         { x, y: ice, type: "scatter", mode: "lines+markers", name: "Ice (%)" },
       ],
       layout,
-      config: { responsive: true },
+      // plotly.js 4 shows a "send chart to cloud" modebar button by default.
+      config: { responsive: true, showSendToCloud: false },
     };
 }
 
@@ -26,7 +27,7 @@ const buildOverlappingFigure = (c, sliderValue) => {
     const ww = sliceIdx(c.ov.ww);
     const ii = sliceIdx(c.ov.ii);
     const wi = sliceIdx(c.ov.wi);
-    const layout = { title: `Overlaps (first ${sliderValue} frames)`, margin: { t: 40 } };
+    const layout = { title: { text: `Overlaps (first ${sliderValue} frames)` }, margin: { t: 40 } };
     if (Array.isArray(x) && x.length > 0) layout.xaxis = { range: [x[0], x[x.length - 1]] };
     return {
       data: [
@@ -35,7 +36,8 @@ const buildOverlappingFigure = (c, sliderValue) => {
         { x, y: wi, type: "scatter", mode: "lines+markers", name: "Water–Ice" },
       ],
       layout,
-      config: { responsive: true },
+      // plotly.js 4 shows a "send chart to cloud" modebar button by default.
+      config: { responsive: true, showSendToCloud: false },
     };
 }
 
@@ -66,7 +68,7 @@ const buildSizeHistogramFigure = (block, color, title, yMax) => {
             layout: {
                 title: { text: `${title} (no detections)`, font: { size: 14 } },
                 margin: { t: 40 },
-                yaxis: yRangeTop ? { title: "Count", range: [0, yRangeTop] } : { title: "Count" },
+                yaxis: yRangeTop ? { title: { text: "Count" }, range: [0, yRangeTop] } : { title: { text: "Count" } },
             },
             config: { responsive: true, displayModeBar: false },
         };
@@ -92,8 +94,8 @@ const buildSizeHistogramFigure = (block, color, title, yMax) => {
         layout: {
             title: { text: title, font: { size: 14 } },
             margin: { t: 40, b: 50 },
-            xaxis: { title: "Equivalent diameter (pixels, log)", type: "log" },
-            yaxis: yRangeTop ? { title: "Count", range: [0, yRangeTop] } : { title: "Count" },
+            xaxis: { title: { text: "Equivalent diameter (pixels, log)" }, type: "log" },
+            yaxis: yRangeTop ? { title: { text: "Count" }, range: [0, yRangeTop] } : { title: { text: "Count" } },
             bargap: 0.05,
         },
         config: { responsive: true, displayModeBar: false },
