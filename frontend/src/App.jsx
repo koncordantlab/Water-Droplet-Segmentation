@@ -5,7 +5,7 @@ import HomePage from "./pages/homepage/HomePage";
 import NoCloseModal from "./components/noclosemodal/NoCloseModal";
 import SummaryPage from "./pages/summarypage/SummaryPage";
 
-const API_BASE = process.env.REACT_APP_BACKEND_API_URL || "/api";
+const API_BASE = import.meta.env.REACT_APP_BACKEND_API_URL || "/api";
 
 const style = {
   position: 'absolute',
