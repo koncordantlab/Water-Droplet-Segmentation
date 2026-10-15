@@ -8,7 +8,8 @@ COPY frontend/ ./
 RUN npm run build
 
 # Stage 2 — runtime. Pinned to the env the golden masters were recorded on
-# (droplets conda env): Python 3.13, torch 2.9.0+cu128, opencv-python 4.10.0.84.
+# (droplets conda env): Python 3.13, opencv-python 4.10.0.84; torch moved
+# 2.9.0 -> 2.10.0 (+cu128) with the goldens re-verified byte-identical.
 # Full opencv (not headless) so the wheel is byte-identical to the host env;
 # libgl1/libglib2.0-0 are its runtime libs (same fix ci.yml uses).
 FROM python:3.13-slim
@@ -17,9 +18,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY backend/requirements.txt ./
-# CUDA 12.8 wheels first (RTX 5090 / sm_120); requirements.txt's torch==2.9.0
-# is then already satisfied by 2.9.0+cu128 (PEP 440 local-version match).
-RUN pip install --no-cache-dir torch==2.9.0 torchvision==0.24.0 \
+# CUDA 12.8 wheels first (RTX 5090 / sm_120); requirements.txt's torch==2.10.0
+# is then already satisfied by 2.10.0+cu128 (PEP 440 local-version match).
+RUN pip install --no-cache-dir torch==2.10.0 torchvision==0.25.0 \
         --index-url https://download.pytorch.org/whl/cu128 \
     && pip install --no-cache-dir -r requirements.txt
 COPY backend/droplet_backend/ ./droplet_backend/
