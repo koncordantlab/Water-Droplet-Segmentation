@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Stage 1 — build the React bundle (same Node major as ci.yml)
-FROM node:20-slim AS webui
+FROM node:22-slim AS webui
 WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
