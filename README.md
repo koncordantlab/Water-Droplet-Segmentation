@@ -113,7 +113,7 @@ REACT_APP_BACKEND_API_URL=http://localhost:8050/api
 npm start
 ```
 
-This opens the React app on http://localhost:3000, calling the backend at the URL from `.env`.
+This serves the React app on http://localhost:3000, calling the backend at the URL from `.env`.
 
 ## Running backend tests
 
